@@ -73,7 +73,7 @@ async function fetchCollectionNfts(address: string, collection: CollectionKey): 
       break
     }
 
-    const data = await response.json()
+    const data: { nfts?: any[]; next?: string | null } = await response.json()
     nfts.push(...(data.nfts || []))
     next = data.next || null
     if (!next || (data.nfts || []).length === 0) break
