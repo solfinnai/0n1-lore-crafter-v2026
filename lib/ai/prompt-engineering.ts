@@ -4,6 +4,8 @@ import {
   getDocumentById,
   searchDocumentsByTags,
 } from "@/lib/lore/documentation"
+import { generatePowerKitContext, hasCanonPowers } from "@/lib/lore/canon/match"
+import { districts, worldOverview } from "@/lib/lore/canon/world"
 import type { CharacterData } from "@/lib/types"
 
 /**
@@ -44,6 +46,18 @@ You are currently helping with the "${currentStep}" step${subStep ? ` (specifica
 
   // Add character context
   systemPrompt += generateCharacterContext(characterData)
+
+  // Add the character's exact canonical power kit, matched from its on-chain traits.
+  // Full detail on the powers step; concise on other steps so backstories stay in canon.
+  if (characterData.traits && hasCanonPowers(characterData.traits)) {
+    const fullDetail = currentStep === "powers" || currentStep === "powersAbilities"
+    systemPrompt += `\n\n## CANONICAL POWERS FOR THIS EXACT NFT (from its on-chain traits - these are the ONLY powers this character can have; never invent powers outside this kit)\n${generatePowerKitContext(characterData.traits, { concise: !fullDetail })}\n`
+  }
+
+  // Add canonical world grounding for backstory-related steps
+  if (currentStep === "background" || currentStep === "worldPosition" || currentStep === "relationships") {
+    systemPrompt += `\n\n## CANONICAL WORLD (all origins and locations must fit The Enclave)\n${worldOverview.setting}\n\nDistricts (use these as the character's home/haunts):\n${districts.map((d) => `- ${d.name} (${d.role}): ${d.description}`).join("\n")}\n`
+  }
 
   // Add relevant lore documents
   const loreContent = generateLoreContext(relevantCategories, relevantTags, specificDocumentIds, maxTokens)

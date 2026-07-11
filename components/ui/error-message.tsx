@@ -68,8 +68,7 @@ export function ErrorMessage({
           message: "You've reached your daily usage limit. Your access will restore at midnight.",
           icon: <Zap className="h-5 w-5 text-yellow-400" />,
           suggestions: [
-            "Try Llama models (free, no daily limits)",
-            "Use the character creation tools (no limits)",
+                        "Use the character creation tools (no limits)",
             "Explore your NFT collection and memories",
             "Come back tomorrow for fresh limits"
           ],
@@ -82,8 +81,7 @@ export function ErrorMessage({
           message: "The AI service is experiencing issues. This is usually temporary.",
           icon: <AlertTriangle className="h-5 w-5 text-red-400" />,
           suggestions: [
-            "Try switching to Llama models (more reliable)",
-            "Wait a few minutes and try again",
+                        "Wait a few minutes and try again",
             "Check if other features are working",
             "Contact support if this persists"
           ],
@@ -181,7 +179,7 @@ export function ErrorMessage({
                     onClick={onSwitchModel}
                     className="bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white"
                   >
-                    Switch to Llama (Free)
+                    Switch Model
                   </Button>
                 )}
               </div>

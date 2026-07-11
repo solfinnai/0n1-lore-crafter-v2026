@@ -3,8 +3,46 @@ import { checkOpenSeaRateLimitEnhanced, createRateLimitResponse } from '@/lib/ra
 import { COLLECTIONS, CollectionKey, getAllCollectionKeys } from '@/lib/collection-config'
 import { UnifiedCharacter, UnifiedCharacterResponse } from '@/lib/types'
 import { withOptionalAuth, getRequestWalletAddress } from '@/lib/auth-middleware'
+import { isDevMode } from '@/lib/auth'
+import { isDemoWallet, DEMO_TOKEN_IDS } from '@/lib/dev-mode'
 
 const OPENSEA_API_KEY = process.env.OPENSEA_API_KEY
+
+// Demo mode: build a set of characters without requiring real ownership.
+// Tries OpenSea for real images (works for any token ID) and falls back to placeholders.
+async function buildDemoCharacters(): Promise<UnifiedCharacter[]> {
+  const forceContract = COLLECTIONS['force' as CollectionKey].contractAddress
+
+  const characters = await Promise.all(DEMO_TOKEN_IDS.map(async (tokenId): Promise<UnifiedCharacter> => {
+    let imageUrl: string | null = null
+    try {
+      const response = await fetch(
+        `https://api.opensea.io/api/v2/chain/ethereum/contract/${forceContract}/nfts/${tokenId}`,
+        {
+          headers: { 'X-API-KEY': OPENSEA_API_KEY || '', 'Accept': 'application/json' },
+          next: { revalidate: 86400 },
+        }
+      )
+      if (response.ok) {
+        const data = await response.json()
+        imageUrl = data.nft?.image_url || null
+      }
+    } catch {
+      // Offline or API error - placeholder below covers it
+    }
+
+    return {
+      tokenId,
+      forceImageUrl: imageUrl || `https://placehold.co/300x300/3a1c71/ffffff?text=0N1+%23${tokenId}`,
+      frameImageUrl: null,
+      hasForce: true,
+      hasFrame: false,
+      displayName: `0N1 #${tokenId} (Demo)`,
+    }
+  }))
+
+  return characters
+}
 
 async function fetchCollectionNfts(address: string, collection: CollectionKey): Promise<any[]> {
   const config = COLLECTIONS[collection]
@@ -107,6 +145,17 @@ export const GET = withOptionalAuth(async (req: NextRequest, sessionInfo) => {
 
   console.log(`Fetching unified characters for address ${walletAddress}`)
   console.log(`🔐 Authentication status: ${sessionInfo.isAuthenticated ? 'AUTHENTICATED' : 'LEGACY_MODE'}`)
+
+  // Demo wallet: return demo characters without hitting the ownership APIs
+  if (isDevMode() && isDemoWallet(walletAddress)) {
+    console.log('🚧 DEV MODE: Returning demo characters for demo wallet')
+    const demoCharacters = (await buildDemoCharacters()).map(char => ({
+      ...char,
+      hasSoul: false, // merged client-side from localStorage
+      soul: null,
+    }))
+    return NextResponse.json({ characters: demoCharacters, totalCount: demoCharacters.length })
+  }
 
   // Apply enhanced rate limits for authenticated users
   const isAuthenticated = sessionInfo.isAuthenticated

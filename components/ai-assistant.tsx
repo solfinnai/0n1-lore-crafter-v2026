@@ -240,17 +240,7 @@ export function AiAssistant({
     setUsingFallback(false)
 
     try {
-      // In preview mode, just use mock data
-      if (typeof window !== "undefined" && window.location.hostname === "localhost") {
-        setTimeout(() => {
-          setSuggestions(getMockSuggestions(currentStep, subStep))
-          setIsLoading(false)
-          setUsingFallback(true)
-        }, 1000)
-        return
-      }
-
-      // For production, try to use the API
+      // Call the API (it falls back to preset suggestions when no AI key is configured)
       try {
         const response = await fetch("/api/ai-assistant", {
           method: "POST",
@@ -411,7 +401,7 @@ export function AiAssistant({
               {usingFallback && (
                 <div className="text-xs text-amber-400 mt-2 flex items-center">
                   <AlertCircle className="h-3 w-3 mr-1" />
-                  Using preset suggestions. AI generation will be available when deployed.
+                  Using preset suggestions. Set ANTHROPIC_API_KEY in .env.local to enable AI generation.
                 </div>
               )}
             </>

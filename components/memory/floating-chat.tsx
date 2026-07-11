@@ -49,8 +49,8 @@ export function FloatingChat({ soul, memoryProfile, onClose, onUpdateMemory }: F
   const [isMinimized, setIsMinimized] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [aiSettings, setAiSettings] = useState<AISettings>({
-    provider: 'openai',
-    model: 'gpt-4o',
+    provider: 'claude',
+    model: 'claude-opus-4-8',
     enhancedPersonality: false
   })
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -73,8 +73,8 @@ export function FloatingChat({ soul, memoryProfile, onClose, onUpdateMemory }: F
         const parsed = JSON.parse(savedSettings)
         // Only restore provider, model, and enhancedPersonality, ignore any legacy apiKey
         setAiSettings({
-          provider: parsed.provider || 'openai',
-          model: parsed.model || 'gpt-4o',
+          provider: 'claude',
+          model: parsed.model?.startsWith('claude') ? parsed.model : 'claude-opus-4-8',
           enhancedPersonality: parsed.enhancedPersonality || false
         })
       } catch (error) {
@@ -264,7 +264,7 @@ export function FloatingChat({ soul, memoryProfile, onClose, onUpdateMemory }: F
                       onChange={(e) => setAiSettings(prev => ({ ...prev, provider: e.target.value as 'openai' | 'claude' }))}
                       className="w-full p-2 rounded bg-black/40 border border-purple-500/30 text-white text-sm"
                     >
-                      <option value="openai">OpenAI</option>
+                      <option value="claude">Claude</option>
                       <option value="claude">Claude (Coming Soon)</option>
                     </select>
                   </div>
@@ -274,13 +274,10 @@ export function FloatingChat({ soul, memoryProfile, onClose, onUpdateMemory }: F
                       value={aiSettings.model}
                       onChange={(e) => setAiSettings(prev => ({ ...prev, model: e.target.value }))}
                       className="w-full p-2 rounded bg-black/40 border border-purple-500/30 text-white text-sm"
-                      disabled={aiSettings.provider !== 'openai'}
+                      disabled={aiSettings.provider !== 'claude'}
                     >
-                      <option value="gpt-4o">GPT-4o (Recommended)</option>
-                      <option value="gpt-4">GPT-4</option>
-                      <option value="gpt-4-turbo">GPT-4 Turbo</option>
-                      <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
-                    </select>
+                      <option value="claude-opus-4-8">Claude Opus 4.8 (Recommended)</option>
+                                                                                      </select>
                   </div>
                   <div className="flex items-center space-x-2">
                     <input

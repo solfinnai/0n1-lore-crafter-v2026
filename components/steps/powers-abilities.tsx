@@ -186,6 +186,20 @@ export function PowersAbilities({ characterData, updateCharacterData, nextStep, 
               </RadioGroup>
             </div>
 
+            {/* Canonical drawbacks and rules */}
+            {powerType.drawbacks && (
+              <div className="space-y-1 mt-4 p-3 border border-red-500/30 rounded-md bg-red-950/20">
+                <h4 className="font-semibold text-red-300">Canonical Drawbacks</h4>
+                <p className="text-sm text-red-100/90">{powerType.drawbacks}</p>
+              </div>
+            )}
+            {powerType.canonNotes && (
+              <div className="space-y-1 mt-2 p-3 border border-purple-500/30 rounded-md bg-purple-950/20">
+                <h4 className="font-semibold text-purple-300">Canon Rules</h4>
+                <p className="text-sm text-purple-100/90">{powerType.canonNotes}</p>
+              </div>
+            )}
+
             {/* Additional Power for Tiger Skin */}
             {powerType.additionalPower && (
               <div className="space-y-2 mt-4 p-3 border border-amber-500/30 rounded-md bg-amber-950/20">

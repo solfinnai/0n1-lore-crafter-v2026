@@ -21,31 +21,38 @@ interface UsageTrackingHook {
 
 export function useUsageTracking(): UsageTrackingHook {
   const { address } = useWallet()
+  // Limits must match DAILY_LIMITS in lib/rate-limit.ts
   const [usage, setUsage] = useState<UsageData>({
-    aiMessages: { used: 0, limit: 20 },
-    summaries: { used: 0, limit: 5 },
-    tokens: { used: 0, limit: 50000 },
+    aiMessages: { used: 0, limit: 100 },
+    summaries: { used: 0, limit: 20 },
+    tokens: { used: 0, limit: 200000 },
     resetTime: new Date(new Date().setHours(24, 0, 0, 0)).toISOString()
   })
 
   const updateUsage = useCallback((headers: Headers) => {
-    const aiMessages = parseInt(headers.get('X-Daily-Remaining-AI-Messages') || '20')
-    const summaries = parseInt(headers.get('X-Daily-Remaining-Summaries') || '5')
-    const tokens = parseInt(headers.get('X-Daily-Remaining-Tokens') || '50000')
+    const aiMessages = headers.get('X-Daily-Remaining-AI-Messages')
+    const summaries = headers.get('X-Daily-Remaining-Summaries')
+    const tokens = headers.get('X-Daily-Remaining-Tokens')
     const resetTime = headers.get('X-Daily-Reset')
 
+    // Only update from responses that actually carry usage headers
+    if (aiMessages === null && summaries === null && tokens === null) return
+
+    const usedFrom = (remaining: string | null, limit: number, prevUsed: number) =>
+      remaining === null ? prevUsed : Math.max(0, limit - parseInt(remaining))
+
     setUsage(prev => ({
-      aiMessages: { 
-        used: prev.aiMessages.limit - aiMessages, 
-        limit: prev.aiMessages.limit 
+      aiMessages: {
+        used: usedFrom(aiMessages, prev.aiMessages.limit, prev.aiMessages.used),
+        limit: prev.aiMessages.limit
       },
-      summaries: { 
-        used: prev.summaries.limit - summaries, 
-        limit: prev.summaries.limit 
+      summaries: {
+        used: usedFrom(summaries, prev.summaries.limit, prev.summaries.used),
+        limit: prev.summaries.limit
       },
-      tokens: { 
-        used: prev.tokens.limit - tokens, 
-        limit: prev.tokens.limit 
+      tokens: {
+        used: usedFrom(tokens, prev.tokens.limit, prev.tokens.used),
+        limit: prev.tokens.limit
       },
       resetTime: resetTime || prev.resetTime
     }))
@@ -70,7 +77,7 @@ export function useUsageTracking(): UsageTrackingHook {
     const tokensPercentage = (usage.tokens.used / usage.tokens.limit) * 100
 
     if (messagesPercentage >= 95) {
-      return `You've used ${usage.aiMessages.used}/${usage.aiMessages.limit} daily messages. Consider switching to Llama models (free).`
+      return `You've used ${usage.aiMessages.used}/${usage.aiMessages.limit} daily messages. They reset at midnight.`
     }
     
     if (messagesPercentage >= 80) {

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { checkOwnershipRateLimit, createRateLimitResponse } from '@/lib/rate-limit'
 import { COLLECTIONS, CollectionKey } from '@/lib/collection-config'
 import { withOptionalAuth, getRequestWalletAddress } from '@/lib/auth-middleware'
+import { isDevMode } from '@/lib/auth'
+import { isDemoWallet } from '@/lib/dev-mode'
 
 const OPENSEA_API_KEY = process.env.OPENSEA_API_KEY
 
@@ -25,6 +27,19 @@ export const GET = withOptionalAuth(async (request: NextRequest, sessionInfo) =>
 
   console.log(`🔐 Ownership verification - Authentication status: ${sessionInfo.isAuthenticated ? 'AUTHENTICATED' : 'LEGACY_MODE'}`)
   console.log(`🔍 Verifying ownership for wallet: ${walletAddress}, tokenId: ${tokenId}`)
+
+  // Demo wallet in dev mode owns everything - lets the app be tested without an NFT
+  if (isDevMode() && isDemoWallet(walletAddress)) {
+    console.log(`🚧 DEV MODE: Granting ownership of #${tokenId} to demo wallet`)
+    return NextResponse.json({
+      owns: true,
+      ownedCollections: ['force'],
+      ownsForce: true,
+      ownsFrame: false,
+      method: 'dev-mode',
+      authenticated: sessionInfo.isAuthenticated
+    })
+  }
 
   // Check rate limit after authentication
   const rateLimitResult = checkOwnershipRateLimit(request)

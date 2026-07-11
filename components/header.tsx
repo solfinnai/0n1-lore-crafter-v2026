@@ -4,7 +4,7 @@ import Link from "next/link"
 import { WalletConnectButton } from "@/components/wallet/wallet-connect-button"
 import { usePathname, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import { BookOpen, Home } from "lucide-react"
+import { BookOpen, Home, Library } from "lucide-react"
 import { SyncStatus } from "@/components/sync-status"
 
 export function Header() {
@@ -39,6 +39,15 @@ export function Header() {
             >
               <BookOpen className="h-4 w-4 mr-2" />
               Souls
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className={pathname?.startsWith("/wiki") ? "text-purple-300" : "text-muted-foreground"}
+              onClick={() => router.push("/wiki")}
+            >
+              <Library className="h-4 w-4 mr-2" />
+              Lore Wiki
             </Button>
           </nav>
         </div>

@@ -1,24 +1,13 @@
 import { NextRequest, NextResponse } from "next/server"
-import OpenAI from "openai"
 import type { CharacterData } from "@/lib/types"
 import { generateEnhancedSystemPrompt } from "@/lib/ai/prompt-engineering"
-import { 
-  checkChatRateLimit, 
+import {
+  checkChatRateLimit,
   createRateLimitResponse,
   checkDailyUsage,
   createDailyLimitResponse
 } from '@/lib/rate-limit'
-
-// Initialize OpenAI client with error handling
-let openai: OpenAI | null = null
-try {
-  openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY || "",
-  })
-} catch (error) {
-  console.error("Failed to initialize OpenAI client:", error)
-  // We'll handle this in the route handler
-}
+import { claudeComplete, isClaudeConfigured } from '@/lib/ai/claude'
 
 export async function POST(request: NextRequest) {
   try {
@@ -39,12 +28,12 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Check if OpenAI client is initialized
-    if (!openai) {
-      console.error("OpenAI client not initialized")
+    // Fall back to preset suggestions when no Claude key is configured
+    if (!isClaudeConfigured()) {
+      console.error("Claude API key not configured (ANTHROPIC_API_KEY)")
       return NextResponse.json(
         {
-          error: "OpenAI client not initialized",
+          error: "Claude API key not configured",
           fallback: true,
           suggestions: getMockSuggestions("default"),
         },
@@ -121,29 +110,16 @@ export async function POST(request: NextRequest) {
     // Create a user prompt based on the character data and current step/subStep
     const userPrompt = createUserPrompt(characterData, currentStep, subStep)
 
-    // Call OpenAI API with timeout
+    // Call Claude
     try {
-      const response = (await Promise.race([
-        openai.chat.completions.create({
-          model: "gpt-4o",
-          messages: [
-            {
-              role: "system",
-              content: systemPrompt,
-            },
-            {
-              role: "user",
-              content: userPrompt,
-            },
-          ],
-          temperature: 0.8,
-          max_tokens: 500,
-        }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("OpenAI API timeout")), 10000)),
-      ])) as OpenAI.Chat.Completions.ChatCompletion
+      const responseText = await claudeComplete({
+        system: systemPrompt,
+        messages: [{ role: "user", content: userPrompt }],
+        maxTokens: 500,
+      })
 
       // Extract and format suggestions
-      const suggestions = formatSuggestions(response.choices[0].message.content || "")
+      const suggestions = formatSuggestions(responseText)
 
       // Remove any asterisk formatting from suggestions
       const cleanSuggestions = suggestions.map(suggestion => removeAsteriskFormatting(suggestion))
@@ -161,7 +137,7 @@ export async function POST(request: NextRequest) {
 
       return NextResponse.json({ suggestions: cleanSuggestions }, { headers: responseHeaders })
     } catch (error) {
-      console.error("Error calling OpenAI API:", error)
+      console.error("Error calling Claude API:", error)
       return NextResponse.json(
         {
           error: "Failed to generate suggestions",
@@ -272,19 +248,23 @@ function createUserPrompt(characterData: CharacterData, currentStep: string, sub
 
   prompt += `\n\nMake your suggestions poetic, evocative, and aligned with a cyberpunk anime fantasy aesthetic. Each suggestion should be 2-4 sentences long.
 
-IMPORTANT: 
+IMPORTANT:
 - NEVER use asterisks (*) or double asterisks (**) for any reason
 - Do NOT use markdown formatting like **bold** or *italic*
 - Write in plain text only without any special formatting characters
-- Use descriptive words for emphasis instead of symbols`
+- Use descriptive words for emphasis instead of symbols
+- Do NOT include any introduction, preamble, or closing line - output ONLY the 3 numbered suggestions`
 
   return prompt
 }
 
 // Format the AI response into an array of suggestions
 function formatSuggestions(content: string): string[] {
+  // Drop a leading preamble line like "Here are three background origins:"
+  const cleaned = content.replace(/^[^\n]{0,120}:\s*\n+/, "")
+
   // Split by numbered items or line breaks
-  const lines = content.split(/\n+/)
+  const lines = cleaned.split(/\n+/)
   const suggestions: string[] = []
 
   let currentSuggestion = ""

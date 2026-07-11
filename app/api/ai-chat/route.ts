@@ -1,105 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server'
-import OpenAI from 'openai'
 import type { CharacterMemoryProfile } from '@/lib/memory-types'
-import { 
-  checkChatRateLimit, 
+import {
+  checkChatRateLimit,
   createRateLimitResponse,
   checkDailyUsage,
   createDailyLimitResponse
 } from '@/lib/rate-limit'
-import { 
-  generatePersonalityPrompt, 
-  generateModelParameters,
-  generateHostileInteractionPrompt 
-} from '@/lib/ai/dynamic-prompt-generator'
+import { claudeComplete, isClaudeConfigured } from '@/lib/ai/claude'
+import { generatePowerKitContext, hasCanonPowers } from '@/lib/lore/canon/match'
 
-// Sleep function for retry delays
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
-}
-
-// Create OpenAI client with server-side API key
-const openai = process.env.OPENAI_API_KEY ? new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-}) : null
-
-// Create Together.ai client for Llama models
-const together = process.env.TOGETHER_API_KEY ? new OpenAI({
-  apiKey: process.env.TOGETHER_API_KEY,
-  baseURL: "https://api.together.xyz/v1",
-}) : null
-
-// Retry function with exponential backoff for rate limits
-async function makeAPICallWithRetry(client: OpenAI, params: any, maxRetries = 3): Promise<any> {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await client.chat.completions.create(params)
-    } catch (error: any) {
-      console.log(`API attempt ${attempt + 1} failed:`, error.message)
-      
-      // Handle specific OpenAI errors
-      if (error.status === 429) {
-        if (attempt === maxRetries) {
-          throw new Error(`Rate limit exceeded after ${maxRetries + 1} attempts. Try using a Llama model instead, or wait a few minutes.`)
-        }
-        
-        // Exponential backoff: 2s, 4s, 8s
-        const delay = Math.pow(2, attempt + 1) * 1000
-        console.log(`Rate limited, retrying in ${delay}ms...`)
-        await sleep(delay)
-        continue
-      }
-      
-      if (error.status === 400) {
-        throw new Error(`Invalid request: ${error.message}`)
-      }
-      
-      if (error.status === 401) {
-        throw new Error(`Authentication failed: Check your API key`)
-      }
-      
-      if (error.status === 403) {
-        throw new Error(`Forbidden: Your API key may not have access to this model`)
-      }
-      
-      if (error.status >= 500) {
-        if (attempt === maxRetries) {
-          throw new Error(`Server error after ${maxRetries + 1} attempts: ${error.message}`)
-        }
-        
-        // Retry server errors with backoff
-        const delay = Math.pow(2, attempt) * 1000
-        console.log(`Server error, retrying in ${delay}ms...`)
-        await sleep(delay)
-        continue
-      }
-      
-      // For other errors, don't retry
-      throw error
-    }
-  }
-}
-
-// Check if model is a Llama model
-function isLlamaModel(model: string): boolean {
-  return model.includes('llama')
-}
-
-// Map our model names to actual API model names
-function getActualModelName(model: string): string {
-  const modelMap: Record<string, string> = {
-    'llama-3.1-70b': 'meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo',
-    'llama-3.1-8b': 'meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo', 
-    'llama-3-70b': 'meta-llama/Llama-3-70b-chat-hf',
-  }
-  return modelMap[model] || model
+// Renders the character's canonical trait-matched powers for chat prompts.
+// Returns an empty string when the soul has no stored traits.
+function buildCanonPowerSection(characterData: any): string {
+  const traits = characterData?.traits
+  if (!Array.isArray(traits) || traits.length === 0 || !hasCanonPowers(traits)) return ''
+  return `
+## YOUR CANONICAL POWERS (matched from your NFT's traits - these are the ONLY powers you have; respect their drawbacks and limits)
+${generatePowerKitContext(traits, { concise: true })}
+`
 }
 
 interface ChatRequest {
   message: string
   nftId: string
   memoryProfile: CharacterMemoryProfile
-  provider: 'openai' | 'claude'
+  // provider/model are accepted for backward compatibility but everything runs on Claude
+  provider?: string
   model?: string
   enhancedPersonality?: boolean
   responseStyle?: string
@@ -141,9 +67,9 @@ export async function POST(request: NextRequest) {
     }
     
     // Otherwise handle as regular chat request
-    const { message, nftId, memoryProfile, provider, model = 'gpt-4o', enhancedPersonality = false, responseStyle = "dialogue" }: ChatRequest = body
+    const { message, nftId, memoryProfile, enhancedPersonality = false, responseStyle = "dialogue" }: ChatRequest = body
 
-    if (!message || !nftId || !memoryProfile || !provider) {
+    if (!message || !nftId || !memoryProfile) {
       return NextResponse.json(
         { error: 'Missing required fields' },
         { status: 400 }
@@ -176,41 +102,18 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Check API key availability based on model
-    const useTogetherAI = isLlamaModel(model)
-    
-    if (useTogetherAI && !process.env.TOGETHER_API_KEY) {
+    // All providers/models are served by Claude now
+    if (!isClaudeConfigured()) {
       return NextResponse.json(
-        { error: 'Together.ai API key not configured for Llama models' },
-        { status: 500 }
-      )
-    }
-    
-    if (!useTogetherAI && !process.env.OPENAI_API_KEY) {
-      return NextResponse.json(
-        { error: 'OpenAI API key not configured' },
+        { error: 'Claude API key not configured. Set ANTHROPIC_API_KEY in .env.local.' },
         { status: 500 }
       )
     }
 
     // Build context from memory profile
-    const { prompt, modelParams } = buildContextFromMemory(memoryProfile, enhancedPersonality, message)
-    
-    let response: string
+    const { prompt } = buildContextFromMemory(memoryProfile, enhancedPersonality, message)
 
-    if (provider === 'openai' || useTogetherAI) {
-      response = await getAIResponse(message, prompt, model, enhancedPersonality, responseStyle, modelParams)
-    } else if (provider === 'claude') {
-      return NextResponse.json(
-        { error: 'Claude support coming soon' },
-        { status: 400 }
-      )
-    } else {
-      return NextResponse.json(
-        { error: 'Invalid provider' },
-        { status: 400 }
-      )
-    }
+    const response = await getAIResponse(message, prompt, enhancedPersonality, responseStyle)
 
     // Return successful response with usage information
     const responseHeaders: Record<string, string> = {}
@@ -229,19 +132,8 @@ export async function POST(request: NextRequest) {
   } catch (error: any) {
     console.error('AI Chat error:', error)
     
-    // Provide helpful error messages based on error type
-    let errorMessage = error.message || "Failed to get AI response"
-    
-    if (error.message?.includes('Rate limit exceeded')) {
-      errorMessage = "OpenAI rate limit exceeded. Try using a Llama model (they have higher limits) or wait a few minutes."
-    } else if (error.message?.includes('insufficient_quota')) {
-      errorMessage = "OpenAI quota exceeded. Try using a Llama model (they're free) or check your OpenAI billing."
-    } else if (error.message?.includes('Authentication failed')) {
-      errorMessage = "API key authentication failed. Please check your configuration."
-    }
-    
     return NextResponse.json(
-      { error: errorMessage },
+      { error: error.message || "Failed to get AI response" },
       { status: 500 }
     )
   }
@@ -280,7 +172,7 @@ function buildContextFromMemory(
 ## CHARACTER ESSENCE
 ${characterData.personalityProfile?.description || 'Complex personality'}
 ${characterData.background ? `\nBackground: ${characterData.background}` : ''}
-
+${buildCanonPowerSection(characterData)}
 ## PERSONALITY TRAITS`
 
   // Add key personality modifiers based on settings
@@ -479,7 +371,7 @@ You are ${characterData.soulName}, a unique character from the 0N1 Force collect
 **Personality:** ${characterData.personalityProfile?.description || "Unknown"}
 **Speech Style:** ${characterData.voice?.speechStyle || "Unknown"}
 **Background:** ${characterData.background || "Unknown"}
-
+${buildCanonPowerSection(characterData)}
 ## RELATIONSHIP CONTEXT
 **Relationship Level:** ${overview.relationshipLevel}
 **Total Interactions:** ${overview.totalInteractions}
@@ -547,21 +439,11 @@ function detectSimpleUserIntent(message: string, history: any[]): string {
 }
 
 async function getAIResponse(
-  message: string, 
-  context: string, 
-  model: string, 
-  enhancedPersonality: boolean, 
-  responseStyle: string = "dialogue",
-  modelParams?: any
+  message: string,
+  context: string,
+  enhancedPersonality: boolean,
+  responseStyle: string = "dialogue"
 ): Promise<string> {
-  const useTogetherAI = isLlamaModel(model)
-  const client = useTogetherAI ? together : openai
-  const actualModelName = getActualModelName(model)
-  
-  if (!client) {
-    throw new Error(`${useTogetherAI ? 'Together.ai' : 'OpenAI'} client not configured`)
-  }
-
   // CRITICAL: Response style instructions come FIRST, before anything else
   let finalContext = ""
   
@@ -607,7 +489,7 @@ ${context}`
   }
 
   // Add enhanced personality AFTER response format (if applicable)
-  if (useTogetherAI && enhancedPersonality) {
+  if (enhancedPersonality) {
     finalContext += `\n\n## PERSONALITY EXPRESSION
 Within the constraints of the response format above, express your personality authentically:
 - Use language that fits your character (including profanity if appropriate)
@@ -616,32 +498,11 @@ Within the constraints of the response format above, express your personality au
 - BUT ALWAYS FOLLOW THE RESPONSE FORMAT RULES ABOVE`
   }
 
-  // Adjust model parameters for better coherence
-  const finalModelParams = modelParams || {
-    temperature: enhancedPersonality ? 0.75 : 0.7, // Lower from 0.9/0.8
-    presence_penalty: useTogetherAI ? 0.3 : 0.2, // Lower from 0.4/0.3
-    frequency_penalty: useTogetherAI ? 0.2 : 0.1, // Lower from 0.3/0.2
-    ...(useTogetherAI && { top_p: 0.95, repetition_penalty: 1.05 }) // Adjust for better coherence
-  }
-
-  const completionParams: any = {
-    model: actualModelName,
-    messages: [
-      {
-        role: "system",
-        content: finalContext
-      },
-      {
-        role: "user",
-        content: message
-      }
-    ],
-    max_tokens: 300, // Reduced from 500 to encourage conciseness
-    ...finalModelParams
-  }
-
-  const completion = await makeAPICallWithRetry(client, completionParams)
-  return completion.choices[0]?.message?.content || "I'm having trouble responding right now."
+  return claudeComplete({
+    system: finalContext,
+    messages: [{ role: "user", content: message }],
+    maxTokens: 300, // Keep responses concise
+  })
 }
 
 // Handler for character creation chat (simpler version without full memory context)
@@ -649,8 +510,8 @@ async function handleCharacterCreationChat(request: CharacterCreationChatRequest
   const { message, characterData, currentStep, subStep, messages } = request
   
   try {
-    if (!openai) {
-      throw new Error('OpenAI client not configured')
+    if (!isClaudeConfigured()) {
+      throw new Error('Claude API key not configured. Set ANTHROPIC_API_KEY in .env.local.')
     }
 
     // Build a simple context for character creation
@@ -675,41 +536,19 @@ Character Details So Far:`
 
     context += `\n\nHelp the user develop their character for the "${currentStep}" step. Be creative, helpful, and stay within the cyberpunk anime fantasy theme of 0N1 Force.`
 
-    // Use simpler parameters for character creation
-    const response = await makeAPICallWithRetry(openai, {
-      model: 'gpt-4o',
-      messages: [
-        { role: 'system', content: context },
-        { role: 'user', content: message }
-      ],
-      temperature: 0.8,
-      max_tokens: 500,
-      presence_penalty: 0.3,
-      frequency_penalty: 0.3
+    const response = await claudeComplete({
+      system: context,
+      messages: [{ role: 'user', content: message }],
+      maxTokens: 500,
     })
 
-    return NextResponse.json({ response: response.choices[0].message.content || "" })
-    
+    return NextResponse.json({ response })
+
   } catch (error: any) {
     console.error('Character creation chat error:', error)
-    
-    let errorMessage = error.message || "Failed to get AI response"
-    
-    if (error.message?.includes('Rate limit exceeded')) {
-      errorMessage = "Too many requests. Please wait a moment and try again."
-    } else if (error.message?.includes('insufficient_quota')) {
-      errorMessage = "OpenAI quota exceeded. Please try again later."
-    }
-    
     return NextResponse.json(
-      { error: errorMessage },
+      { error: error.message || "Failed to get AI response" },
       { status: 500 }
     )
   }
 }
-
-// Anthropic support will be added later
-// async function getAnthropicResponse(message: string, context: string, apiKey: string): Promise<string> {
-//   // Implementation will be added when Anthropic SDK is properly installed
-//   return "Anthropic support coming soon"
-// }

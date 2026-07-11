@@ -1,17 +1,13 @@
 import { NextRequest, NextResponse } from "next/server"
-import OpenAI from "openai"
 import type { CharacterData } from "@/lib/types"
 import type { CharacterMemoryProfile } from "@/lib/memory-types"
-import { 
-  checkChatRateLimit, 
+import {
+  checkChatRateLimit,
   createRateLimitResponse,
   checkDailyUsage,
   createDailyLimitResponse
 } from '@/lib/rate-limit'
-
-const openai = process.env.OPENAI_API_KEY ? new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-}) : null
+import { claudeComplete, isClaudeConfigured } from '@/lib/ai/claude'
 
 export async function POST(request: NextRequest) {
   try {
@@ -32,8 +28,8 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    if (!openai) {
-      return NextResponse.json({ error: "OpenAI API key is not configured" }, { status: 500 })
+    if (!isClaudeConfigured()) {
+      return NextResponse.json({ error: "Claude API key is not configured. Set ANTHROPIC_API_KEY in .env.local." }, { status: 500 })
     }
 
     const { 
@@ -104,23 +100,11 @@ ${contextText}
 
 Write exactly 100 words or less. Make it engaging and narrative-focused.`
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content: "You are a skilled storyteller and character analyst. Write compelling, concise character summaries that capture the essence of a character's journey and current state."
-        },
-        {
-          role: "user",
-          content: prompt
-        }
-      ],
-      max_tokens: 150,
-      temperature: 0.7,
-    })
-
-    const summary = completion.choices[0]?.message?.content?.trim()
+    const summary = (await claudeComplete({
+      system: "You are a skilled storyteller and character analyst. Write compelling, concise character summaries that capture the essence of a character's journey and current state.",
+      messages: [{ role: "user", content: prompt }],
+      maxTokens: 150,
+    })).trim()
 
     if (!summary) {
       return NextResponse.json({ error: "Failed to generate summary" }, { status: 500 })

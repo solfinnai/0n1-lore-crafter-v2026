@@ -179,7 +179,7 @@ export function UsageIndicator({ usage, className = "", compact = false, showWar
               <div className="space-y-1 text-sm">
                 <p className="text-yellow-300 font-medium">Usage Warning</p>
                 {messagesStatus.status === "critical" && (
-                  <p className="text-yellow-200">You've almost reached your daily message limit! Consider using Llama models (free) or wait for tomorrow's reset.</p>
+                  <p className="text-yellow-200">You've almost reached your daily message limit! It resets tomorrow.</p>
                 )}
                 {messagesStatus.status === "warning" && (
                   <p className="text-yellow-200">You're using {Math.round((usage.aiMessages.used / usage.aiMessages.limit) * 100)}% of your daily messages. Plan your remaining conversations wisely.</p>

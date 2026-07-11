@@ -1,10 +1,11 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Cloud, CloudOff, RefreshCw } from "lucide-react"
+import { Cloud, CloudOff, HardDrive, RefreshCw } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { manualSync } from "@/lib/storage-wrapper"
+import { supabase } from "@/lib/supabase"
 import { toast } from "sonner"
 import { useWallet } from "@/components/wallet/wallet-provider"
 
@@ -84,6 +85,20 @@ export function SyncStatus() {
   }
 
   if (!address) return null
+
+  // Cloud storage disabled - souls live in browser localStorage only
+  if (!supabase) {
+    return (
+      <Badge
+        variant="outline"
+        className="border-purple-500/50 text-purple-300"
+        title="Souls are saved in this browser. Cloud sync is not configured."
+      >
+        <HardDrive className="w-3 h-3 mr-1" />
+        Local only
+      </Badge>
+    )
+  }
 
   return (
     <div className="flex items-center gap-2">

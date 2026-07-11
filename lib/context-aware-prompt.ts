@@ -1,6 +1,7 @@
 import type { CharacterData } from "./types"
 import { type EnhancedMemory, generateEnhancedMemorySummary, calculateMemoryRelevance } from "./memory-enhanced"
 import { type LoreCategory, getDocumentsByCategory } from "./lore/documentation"
+import { generatePowerKitContext, hasCanonPowers } from "./lore/canon/match"
 
 interface ContextAwarePromptOptions {
   characterData: CharacterData
@@ -46,6 +47,14 @@ export function generateContextAwarePrompt(options: ContextAwarePromptOptions): 
 **Archetype:** ${characterData.archetype}
 **NFT Traits:** ${characterData.traits ? characterData.traits.map((t) => `${t.trait_type}: ${t.value}`).join(", ") : "No traits available"}
 `
+
+  // Add the exact canonical powers matched from the NFT's traits
+  if (characterData.traits && hasCanonPowers(characterData.traits)) {
+    prompt += `
+## YOUR CANONICAL POWERS (matched from your NFT's traits - these are the ONLY powers you have; respect their drawbacks and limits)
+${generatePowerKitContext(characterData.traits, { concise: true })}
+`
+  }
 
   // Add personality details if requested
   if (includeFullPersonality) {

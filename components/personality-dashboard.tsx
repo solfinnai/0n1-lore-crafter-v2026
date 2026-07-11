@@ -430,13 +430,13 @@ export function PersonalityDashboard({ soul, onUpdate }: PersonalityDashboardPro
                       // When set to EXTREME (90+), maximize certain traits
                       if (intensity >= 90) {
                         // Enhanced personality mode will be activated automatically
-                        // Llama model will be auto-selected when chat detects extreme personality
+                        // Extreme personality mode is expressed through the prompt
                       }
                     }}
                   />
                   {(personalitySettings.globalIntensity ?? 0) >= 90 && (
                     <div className="mt-3 text-xs text-red-400 bg-red-900/20 border border-red-500/30 rounded p-2">
-                      🔥 EXTREME MODE ACTIVE: No content filters. Raw, unfiltered personality. Llama model recommended.
+                      🔥 EXTREME MODE ACTIVE: Raw, unfiltered personality expression.
                     </div>
                   )}
                 </div>

@@ -103,8 +103,8 @@ export function FinalLore({ characterData, updateCharacterData, prevStep }: Fina
       setIsSaved(true)
 
       // Show success toast
-      toast.success("Soul saved successfully! It will sync to cloud storage automatically.", {
-        description: "Your soul is saved locally and will sync when connected."
+      toast.success("Soul saved successfully!", {
+        description: "Your soul is saved in this browser."
       })
 
       // Show success state for 2 seconds

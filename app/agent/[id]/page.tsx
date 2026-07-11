@@ -101,7 +101,7 @@ interface SavedMemorySegment {
 export default function AgentPage() {
   const params = useParams()
   const router = useRouter()
-  const { address, isConnected } = useWallet()
+  const { address, isConnected, isInitializing: walletInitializing } = useWallet()
   const [soul, setSoul] = useState<StoredSoul | null>(null)
   const [agentConfig, setAgentConfig] = useState<AgentConfig | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
@@ -115,7 +115,7 @@ export default function AgentPage() {
   const [memoryStats, setMemoryStats] = useState<any>(null)
   const [isFirstConversation, setIsFirstConversation] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [model, setModel] = useState("gpt-4o")
+  const [model, setModel] = useState("claude-opus-4-8")
   const [temperature, setTemperature] = useState(0.7)
   const [maxTokens, setMaxTokens] = useState(800)
   const [contextMode, setContextMode] = useState<"basic" | "enhanced">("enhanced")
@@ -475,7 +475,8 @@ export default function AgentPage() {
       if (savedSettings) {
         try {
           const settings = JSON.parse(savedSettings)
-          setModel(settings.model || "gpt-4o")
+          // Older saved settings may reference retired OpenAI/Llama models - map them to Claude
+          setModel(settings.model?.startsWith("claude") ? settings.model : "claude-opus-4-8")
           setTemperature(settings.temperature || 0.7)
           setMaxTokens(settings.maxTokens || 800)
           setContextMode(settings.contextMode || "enhanced")
@@ -639,9 +640,13 @@ export default function AgentPage() {
 
   // Ownership verification effect
   useEffect(() => {
+    // Wait until the wallet connection has been restored from localStorage,
+    // otherwise a hard page load always redirects before the wallet hydrates
+    if (walletInitializing) return
+
     const verifyOwnership = async () => {
       const nftId = params.id as string
-      
+
       // First check if wallet is connected
       if (!isConnected || !address) {
         // Redirect to homepage with connection prompt
@@ -666,10 +671,10 @@ export default function AgentPage() {
     }
 
     // Only verify if we have the necessary data
-    if (params.id && (isConnected !== null)) {
+    if (params.id) {
       verifyOwnership()
     }
-  }, [params.id, isConnected, address, router])
+  }, [params.id, isConnected, address, router, walletInitializing])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -680,7 +685,7 @@ export default function AgentPage() {
     
     // Check usage limits before sending
     if (!canUseFeature('messages')) {
-      setError("Daily message limit reached. Try again tomorrow or switch to Llama models.")
+      setError("Daily message limit reached. Try again tomorrow.")
       return
     }
 
@@ -746,21 +751,6 @@ export default function AgentPage() {
         }
       }
 
-      // Auto-switch to Llama for extreme personalities
-      let actualModel = model
-      if (soul!.data.personalitySettings && enhancedPersonality) {
-        const settings = soul!.data.personalitySettings
-        // Check for extreme personality traits
-        if (settings.profanityUsage > 80 || settings.agreeableness < 20 || 
-            settings.empathy < 20 || settings.neuroticism > 80) {
-          // Force Llama model for extreme personalities
-          if (!model.includes('llama')) {
-            actualModel = 'llama-3.1-70b'
-            console.log('Auto-switching to Llama for extreme personality')
-          }
-        }
-      }
-
       const response = await fetch("/api/ai-chat", {
         method: "POST",
         headers: {
@@ -770,8 +760,8 @@ export default function AgentPage() {
           message: userMessage.content,
           nftId: params.id,
           memoryProfile: characterMemoryProfile,
-          provider: actualModel.includes('llama') ? 'openai' : 'openai', // Both use OpenAI client
-          model: actualModel,
+          provider: 'claude',
+          model: model,
           enhancedPersonality: enhancedPersonality,
           responseStyle: responseStyle,
         }),
@@ -965,17 +955,11 @@ export default function AgentPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="gpt-4o">GPT-4o (Recommended)</SelectItem>
-                  <SelectItem value="gpt-4">GPT-4</SelectItem>
-                  <SelectItem value="gpt-4-turbo">GPT-4 Turbo</SelectItem>
-                  <SelectItem value="gpt-3.5-turbo">GPT-3.5 Turbo</SelectItem>
-                  <SelectItem value="llama-3.1-70b">🔥 Llama 3.1 70B (Uncensored)</SelectItem>
-                  <SelectItem value="llama-3.1-8b">🔥 Llama 3.1 8B (Uncensored)</SelectItem>
-                  <SelectItem value="llama-3-70b">🔥 Llama 3 70B (Uncensored)</SelectItem>
+                  <SelectItem value="claude-opus-4-8">Claude Opus 4.8 (Recommended)</SelectItem>
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                🔥 Llama models are uncensored and perfect for aggressive personalities
+                All conversations are powered by Claude via your Anthropic API key
               </p>
             </div>
 
@@ -1117,7 +1101,6 @@ export default function AgentPage() {
                   summaries: usage.summaries.limit - usage.summaries.used,
                   tokens: usage.tokens.limit - usage.tokens.used
                 }}
-                onSwitchModel={() => setModelWithSave('llama-3.1-70b')}
                 onRetry={() => setError(null)}
               />
             ) : error.startsWith('rate_limit:') ? (
@@ -1131,7 +1114,6 @@ export default function AgentPage() {
                 error={error.replace('api_error:', '')}
                 type="api_error"
                 onRetry={() => setError(null)}
-                onSwitchModel={() => setModelWithSave('llama-3.1-70b')}
               />
             ) : (
               <ErrorMessage
