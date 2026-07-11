@@ -36,8 +36,6 @@ interface FloatingChatProps {
 }
 
 interface AISettings {
-  provider: 'openai' | 'claude'
-  model: string
   enhancedPersonality?: boolean
 }
 
@@ -49,8 +47,6 @@ export function FloatingChat({ soul, memoryProfile, onClose, onUpdateMemory }: F
   const [isMinimized, setIsMinimized] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [aiSettings, setAiSettings] = useState<AISettings>({
-    provider: 'claude',
-    model: 'claude-opus-4-8',
     enhancedPersonality: false
   })
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -71,10 +67,8 @@ export function FloatingChat({ soul, memoryProfile, onClose, onUpdateMemory }: F
     if (savedSettings) {
       try {
         const parsed = JSON.parse(savedSettings)
-        // Only restore provider, model, and enhancedPersonality, ignore any legacy apiKey
+        // Ignore legacy provider/model/apiKey fields from older versions
         setAiSettings({
-          provider: 'claude',
-          model: parsed.model?.startsWith('claude') ? parsed.model : 'claude-opus-4-8',
           enhancedPersonality: parsed.enhancedPersonality || false
         })
       } catch (error) {
@@ -122,8 +116,6 @@ export function FloatingChat({ soul, memoryProfile, onClose, onUpdateMemory }: F
               walletAddress: address // Include wallet address for daily limits
             }
           },
-          provider: aiSettings.provider,
-          model: aiSettings.model,
           enhancedPersonality: aiSettings.enhancedPersonality
         })
       })
@@ -257,28 +249,6 @@ export function FloatingChat({ soul, memoryProfile, onClose, onUpdateMemory }: F
               <div className="mb-4 p-4 rounded-lg bg-purple-900/20 border border-purple-500/30">
                 <h4 className="font-medium text-purple-300 mb-3">AI Settings</h4>
                 <div className="space-y-3">
-                  <div>
-                    <label className="text-xs text-purple-300 mb-1 block">Provider</label>
-                    <select 
-                      value={aiSettings.provider}
-                      onChange={(e) => setAiSettings(prev => ({ ...prev, provider: e.target.value as 'openai' | 'claude' }))}
-                      className="w-full p-2 rounded bg-black/40 border border-purple-500/30 text-white text-sm"
-                    >
-                      <option value="claude">Claude</option>
-                      <option value="claude">Claude (Coming Soon)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs text-purple-300 mb-1 block">Model</label>
-                    <select 
-                      value={aiSettings.model}
-                      onChange={(e) => setAiSettings(prev => ({ ...prev, model: e.target.value }))}
-                      className="w-full p-2 rounded bg-black/40 border border-purple-500/30 text-white text-sm"
-                      disabled={aiSettings.provider !== 'claude'}
-                    >
-                      <option value="claude-opus-4-8">Claude Opus 4.8 (Recommended)</option>
-                                                                                      </select>
-                  </div>
                   <div className="flex items-center space-x-2">
                     <input
                       type="checkbox"

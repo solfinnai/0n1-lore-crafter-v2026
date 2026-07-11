@@ -262,7 +262,7 @@ export function PersonalityDashboard({ soul, onUpdate }: PersonalityDashboardPro
           agreeableness: 0,
           neuroticism: 100,
           sarcasmLevel: 100,
-          witHumor: 80,
+          witHumor: 95, // >= 90 so trickster-chaos prompt blocks stay reachable if profanity is dialed down
           empathy: 0,
           confidence: 100,
           impulsiveness: 100,
