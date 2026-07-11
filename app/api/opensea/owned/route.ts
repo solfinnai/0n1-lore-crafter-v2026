@@ -46,35 +46,42 @@ async function buildDemoCharacters(): Promise<UnifiedCharacter[]> {
 
 async function fetchCollectionNfts(address: string, collection: CollectionKey): Promise<any[]> {
   const config = COLLECTIONS[collection]
-  // Use contract address instead of collection slug for more reliable results
-  const url = `https://api.opensea.io/v2/chain/ethereum/account/${address}/nfts?asset_contract_address=${config.contractAddress}&limit=50`
-  
-  console.log(`Fetching ${config.displayName} NFTs: ${url}`)
-  
-  const response = await fetch(url, {
-    headers: {
-      'X-API-KEY': OPENSEA_API_KEY || '',
-      'Accept': 'application/json',
-    },
-  })
+  // OpenSea's v2 account endpoint filters by collection SLUG. The old
+  // asset_contract_address param is v1-only and silently ignored by v2, which
+  // made wallets with many non-0N1 NFTs only surface the 0N1s that happened to
+  // land in the first page of results. Filter by slug and follow the `next`
+  // cursor so large wallets get ALL their 0N1s.
+  const nfts: any[] = []
+  let next: string | null = null
 
-  if (!response.ok) {
-    console.log(`Failed to fetch ${config.displayName} NFTs: ${response.status}`)
-    return []
+  for (let page = 0; page < 10; page++) {
+    const url =
+      `https://api.opensea.io/v2/chain/ethereum/account/${address}/nfts` +
+      `?collection=${config.openSeaSlug}&limit=50${next ? `&next=${encodeURIComponent(next)}` : ""}`
+
+    console.log(`Fetching ${config.displayName} NFTs (page ${page + 1})`)
+
+    const response = await fetch(url, {
+      headers: {
+        'X-API-KEY': OPENSEA_API_KEY || '',
+        'Accept': 'application/json',
+      },
+    })
+
+    if (!response.ok) {
+      console.log(`Failed to fetch ${config.displayName} NFTs: ${response.status}`)
+      break
+    }
+
+    const data = await response.json()
+    nfts.push(...(data.nfts || []))
+    next = data.next || null
+    if (!next || (data.nfts || []).length === 0) break
   }
 
-  const data = await response.json()
-  const nfts = data.nfts || []
-  
   console.log(`Found ${nfts.length} ${config.displayName} NFTs`)
   console.log(`${config.displayName} NFT IDs:`, nfts.map((nft: any) => nft.identifier))
-  console.log(`${config.displayName} detailed data:`, nfts.map((nft: any) => ({
-    identifier: nft.identifier,
-    name: nft.name,
-    image_url: nft.image_url,
-    contract: nft.contract
-  })))
-  
+
   return nfts
 }
 
@@ -119,14 +126,18 @@ async function fetchFrameNftByTokenId(tokenId: string): Promise<any | null> {
   }
 }
 
-// Helper function to validate NFT has required properties
+// Helper function to validate NFT has required properties.
+// Only identifier + contract are required - name and image can be missing when
+// OpenSea hasn't refreshed metadata, and we fall back to placeholders for those
+// rather than hiding an NFT the wallet genuinely owns.
 function isValidNft(nft: any): boolean {
-  return nft && 
-         nft.identifier && 
-         nft.contract && 
-         nft.name && 
-         nft.image_url &&
-         nft.image_url.trim() !== ''
+  return !!(nft && nft.identifier && nft.contract)
+}
+
+function nftImageUrl(nft: any): string {
+  return nft.image_url && String(nft.image_url).trim() !== ""
+    ? nft.image_url
+    : `https://placehold.co/300x300/3a1c71/ffffff?text=0N1+%23${nft.identifier}`
 }
 
 export const GET = withOptionalAuth(async (req: NextRequest, sessionInfo) => {
@@ -270,8 +281,8 @@ export const GET = withOptionalAuth(async (req: NextRequest, sessionInfo) => {
 
       const character: UnifiedCharacter = {
         tokenId,
-        forceImageUrl: forceNft.image_url,
-        frameImageUrl: hasActualFrame ? frameNft!.image_url : null, // null if no Frame NFT owned
+        forceImageUrl: nftImageUrl(forceNft),
+        frameImageUrl: hasActualFrame ? nftImageUrl(frameNft!) : null, // null if no Frame NFT owned
         hasForce: true,
         hasFrame: hasActualFrame, // Only true if user actually owns the Frame NFT
         displayName: forceNft.name || `0N1 #${tokenId}`
@@ -289,7 +300,7 @@ export const GET = withOptionalAuth(async (req: NextRequest, sessionInfo) => {
         const character: UnifiedCharacter = {
           tokenId,
           forceImageUrl: null, // null if no Force NFT owned
-          frameImageUrl: frameNft.image_url,
+          frameImageUrl: nftImageUrl(frameNft),
           hasForce: false,
           hasFrame: true,
           displayName: frameNft.name || `0N1 #${tokenId}`

@@ -115,7 +115,9 @@ export async function POST(request: NextRequest) {
       const responseText = await claudeComplete({
         system: systemPrompt,
         messages: [{ role: "user", content: userPrompt }],
-        maxTokens: 500,
+        // Three paragraph-length suggestions need ~1200+ tokens; 500 was cutting
+        // the third suggestion off mid-sentence.
+        maxTokens: 1600,
       })
 
       // Extract and format suggestions
@@ -299,6 +301,13 @@ function formatSuggestions(content: string): string[] {
   // If we couldn't parse properly, just split by paragraphs
   if (suggestions.length === 0) {
     return content.split(/\n\n+/).filter((s) => s.trim())
+  }
+
+  // Drop a truncated final suggestion (response hit the token limit
+  // mid-sentence) - better to show 2 complete stories than a cut-off one.
+  const last = suggestions[suggestions.length - 1]
+  if (suggestions.length > 1 && !/[.!?"'…)]$/.test(last.trim())) {
+    suggestions.pop()
   }
 
   // Limit to 3 suggestions

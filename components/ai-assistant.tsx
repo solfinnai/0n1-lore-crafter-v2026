@@ -392,11 +392,13 @@ export function AiAssistant({
             </div>
           ) : (
             <>
-              {suggestions.map((suggestion, index) => (
-                <div key={index} className="ai-suggestion" onClick={() => handleSuggestionClick(suggestion)}>
-                  {suggestion}
-                </div>
-              ))}
+              <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+                {suggestions.map((suggestion, index) => (
+                  <div key={index} className="ai-suggestion" onClick={() => handleSuggestionClick(suggestion)}>
+                    {suggestion}
+                  </div>
+                ))}
+              </div>
 
               {usingFallback && (
                 <div className="text-xs text-amber-400 mt-2 flex items-center">
