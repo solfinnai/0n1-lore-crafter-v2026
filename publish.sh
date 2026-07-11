@@ -19,6 +19,12 @@ if ! git diff-index --quiet HEAD --; then
   exit 1
 fi
 
+# Skip when nothing changed since the last publish
+if [ "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse 'v2026-release^{tree}')" ]; then
+  echo "Nothing new to publish - the live site already has this exact code."
+  exit 0
+fi
+
 SNAPSHOT=$(git commit-tree "HEAD^{tree}" -p v2026-release -m "$MSG")
 git branch -f v2026-release "$SNAPSHOT"
 git push v2026 v2026-release:main
