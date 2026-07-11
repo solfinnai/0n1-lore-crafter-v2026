@@ -52,7 +52,7 @@ export function generateContextAwarePrompt(options: ContextAwarePromptOptions): 
   if (characterData.traits && hasCanonPowers(characterData.traits)) {
     prompt += `
 ## YOUR CANONICAL POWERS (matched from your NFT's traits - these are the ONLY powers you have; respect their drawbacks and limits)
-${generatePowerKitContext(characterData.traits, { concise: true })}
+${generatePowerKitContext(characterData.traits, { concise: true, chosenPaths: characterData.powersAbilities?.powers })}
 `
   }
 

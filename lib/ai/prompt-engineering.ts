@@ -51,7 +51,7 @@ You are currently helping with the "${currentStep}" step${subStep ? ` (specifica
   // Full detail on the powers step; concise on other steps so backstories stay in canon.
   if (characterData.traits && hasCanonPowers(characterData.traits)) {
     const fullDetail = currentStep === "powers" || currentStep === "powersAbilities"
-    systemPrompt += `\n\n## CANONICAL POWERS FOR THIS EXACT NFT (from its on-chain traits - these are the ONLY powers this character can have; never invent powers outside this kit)\n${generatePowerKitContext(characterData.traits, { concise: !fullDetail })}\n`
+    systemPrompt += `\n\n## CANONICAL POWERS FOR THIS EXACT NFT (from its on-chain traits - these are the ONLY powers this character can have; never invent powers outside this kit)\n${generatePowerKitContext(characterData.traits, { concise: !fullDetail, chosenPaths: characterData.powersAbilities?.powers })}\n`
   }
 
   // Add canonical world grounding for backstory-related steps

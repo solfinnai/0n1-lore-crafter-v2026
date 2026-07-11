@@ -16,7 +16,7 @@ function buildCanonPowerSection(characterData: any): string {
   if (!Array.isArray(traits) || traits.length === 0 || !hasCanonPowers(traits)) return ''
   return `
 ## YOUR CANONICAL POWERS (matched from your NFT's traits - these are the ONLY powers you have; respect their drawbacks and limits)
-${generatePowerKitContext(traits, { concise: true })}
+${generatePowerKitContext(traits, { concise: true, chosenPaths: characterData?.powersAbilities?.powers })}
 `
 }
 
