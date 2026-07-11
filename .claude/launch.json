@@ -5,7 +5,8 @@
       "name": "dev",
       "runtimeExecutable": "npx",
       "runtimeArgs": ["pnpm@9", "run", "dev"],
-      "port": 3000
+      "port": 3000,
+      "autoPort": true
     }
   ]
 }

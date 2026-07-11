@@ -39,8 +39,6 @@ interface FloatingChatProps {
 }
 
 interface AISettings {
-  provider: 'openai' | 'claude'
-  model: string
   enhancedPersonality?: boolean
   responseStyle?: string
 }
@@ -54,8 +52,6 @@ export function FloatingChat({ soul, memoryProfile, onClose, onUpdateMemory }: F
   const [showSettings, setShowSettings] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [aiSettings, setAiSettings] = useState<AISettings>({
-    provider: 'openai',
-    model: 'gpt-4o',
     enhancedPersonality: false,
     responseStyle: 'dialogue'
   })
@@ -80,10 +76,8 @@ export function FloatingChat({ soul, memoryProfile, onClose, onUpdateMemory }: F
     if (savedSettings) {
       try {
         const parsed = JSON.parse(savedSettings)
-        // Only restore provider, model, and enhancedPersonality, ignore any legacy apiKey
+        // Ignore legacy provider/model/apiKey fields from older versions
         setAiSettings({
-          provider: parsed.provider || 'openai',
-          model: parsed.model || 'gpt-4o',
           enhancedPersonality: parsed.enhancedPersonality || false,
           responseStyle: parsed.responseStyle || 'dialogue'
         })
@@ -140,8 +134,6 @@ export function FloatingChat({ soul, memoryProfile, onClose, onUpdateMemory }: F
               walletAddress: address // Include wallet address for daily limits
             }
           },
-          provider: aiSettings.provider,
-          model: aiSettings.model,
           enhancedPersonality: aiSettings.enhancedPersonality,
           responseStyle: aiSettings.responseStyle
         })
@@ -318,7 +310,6 @@ export function FloatingChat({ soul, memoryProfile, onClose, onUpdateMemory }: F
                       summaries: usage.summaries.limit - usage.summaries.used,
                       tokens: usage.tokens.limit - usage.tokens.used
                     }}
-                    onSwitchModel={() => setAiSettings(prev => ({ ...prev, model: 'llama-3.1-70b' }))}
                     onRetry={() => setError(null)}
                     className="text-xs"
                   />
@@ -334,7 +325,6 @@ export function FloatingChat({ soul, memoryProfile, onClose, onUpdateMemory }: F
                     error={error.replace('api_error:', '')}
                     type="api_error"
                     onRetry={() => setError(null)}
-                    onSwitchModel={() => setAiSettings(prev => ({ ...prev, model: 'llama-3.1-70b' }))}
                     className="text-xs"
                   />
                 ) : (
@@ -353,34 +343,6 @@ export function FloatingChat({ soul, memoryProfile, onClose, onUpdateMemory }: F
               <div className="mb-4 p-4 rounded-lg bg-purple-900/20 border border-purple-500/30">
                 <h4 className="font-medium text-purple-300 mb-3">AI Settings</h4>
                 <div className="space-y-3">
-                  <div>
-                    <label className="text-xs text-purple-300 mb-1 block">Provider</label>
-                    <select 
-                      value={aiSettings.provider}
-                      onChange={(e) => setAiSettings(prev => ({ ...prev, provider: e.target.value as 'openai' | 'claude' }))}
-                      className="w-full p-2 rounded bg-black/40 border border-purple-500/30 text-white text-sm"
-                    >
-                      <option value="openai">OpenAI</option>
-                      <option value="claude">Claude (Coming Soon)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs text-purple-300 mb-1 block">Model</label>
-                    <select 
-                      value={aiSettings.model}
-                      onChange={(e) => setAiSettings(prev => ({ ...prev, model: e.target.value }))}
-                      className="w-full p-2 rounded bg-black/40 border border-purple-500/30 text-white text-sm"
-                      disabled={aiSettings.provider !== 'openai'}
-                    >
-                      <option value="gpt-4o">GPT-4o (Recommended)</option>
-                      <option value="gpt-4">GPT-4</option>
-                      <option value="gpt-4-turbo">GPT-4 Turbo</option>
-                      <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
-                      <option value="llama-3.1-70b">🔥 Llama 3.1 70B (Uncensored)</option>
-                      <option value="llama-3.1-8b">🔥 Llama 3.1 8B (Uncensored)</option>
-                      <option value="llama-3-70b">🔥 Llama 3 70B (Uncensored)</option>
-                    </select>
-                  </div>
                   <div className="flex items-center space-x-2">
                     <input
                       type="checkbox"

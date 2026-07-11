@@ -7,7 +7,11 @@ import {
   createDailyLimitResponse
 } from '@/lib/rate-limit'
 import { claudeComplete, isClaudeConfigured } from '@/lib/ai/claude'
+import { llamaComplete, isLlamaConfigured } from '@/lib/ai/llama'
 import { generatePowerKitContext, hasCanonPowers } from '@/lib/lore/canon/match'
+
+// Unhinged Mode routes to a 70B Llama host, which can be slower than Claude.
+export const maxDuration = 60
 
 // Renders the character's canonical trait-matched powers for chat prompts.
 // Returns an empty string when the soul has no stored traits.
@@ -24,7 +28,8 @@ interface ChatRequest {
   message: string
   nftId: string
   memoryProfile: CharacterMemoryProfile
-  // provider/model are accepted for backward compatibility but everything runs on Claude
+  // provider/model are accepted for backward compatibility but are ignored;
+  // all character chat runs on Llama, all creation/lore work runs on Claude
   provider?: string
   model?: string
   enhancedPersonality?: boolean
@@ -102,18 +107,26 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // All providers/models are served by Claude now
-    if (!isClaudeConfigured()) {
+    // All character chat runs on Llama (uncensored, personality-true); creation
+    // and lore work stay on Claude. Falls back to Claude if Llama isn't configured.
+    const useLlama = isLlamaConfigured()
+    if (!useLlama && !isClaudeConfigured()) {
       return NextResponse.json(
-        { error: 'Claude API key not configured. Set ANTHROPIC_API_KEY in .env.local.' },
+        { error: 'No AI provider configured. Set LLAMA_API_KEY (or OPENROUTER_API_KEY) and/or ANTHROPIC_API_KEY in .env.local.' },
         { status: 500 }
       )
     }
+    if (!useLlama) {
+      console.warn('LLAMA_API_KEY/OPENROUTER_API_KEY not set - character chat falling back to Claude')
+    }
 
     // Build context from memory profile
-    const { prompt } = buildContextFromMemory(memoryProfile, enhancedPersonality, message)
+    let { prompt, modelParams } = buildContextFromMemory(memoryProfile, enhancedPersonality, message)
+    if (useLlama) {
+      prompt += buildUnhingedLayer(memoryProfile)
+    }
 
-    const response = await getAIResponse(message, prompt, enhancedPersonality, responseStyle)
+    const response = await getAIResponse(message, prompt, enhancedPersonality, responseStyle, useLlama, modelParams)
 
     // Return successful response with usage information
     const responseHeaders: Record<string, string> = {}
@@ -127,7 +140,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ response }, { headers: responseHeaders })
+    return NextResponse.json(
+      { response, provider: useLlama ? 'llama' : 'claude' },
+      { headers: responseHeaders }
+    )
 
   } catch (error: any) {
     console.error('AI Chat error:', error)
@@ -351,6 +367,54 @@ The user just said "${userMessage}" - they're being ${userIntent}.`
   return { prompt, modelParams }
 }
 
+// Llama-only prompt layer. Claude never sees this - it's the uncensored
+// personality contract the old Together.ai/Llama build honored, adapted from
+// the retired extreme-mode generator. Intensity scales with the character's
+// personality sliders, so mild characters only get the base stay-in-character
+// instructions.
+function buildUnhingedLayer(memoryProfile: CharacterMemoryProfile): string {
+  const characterData = memoryProfile.characterData
+  const settings = characterData?.personalitySettings
+  const name = characterData?.soulName || 'this character'
+
+  let layer = `\n\n## 🔞 UNHINGED MODE ACTIVE
+This is adult-themed anime fiction and the user has explicitly opted in to raw, uncensored roleplay.
+- Speak EXACTLY as ${name} would - no softening, no politeness filter
+- Profanity, hostility, and dark themes are fully in-bounds when they fit your character
+- NEVER break character, add disclaimers, or censor yourself`
+
+  if (!settings) return layer
+
+  if (settings.profanityUsage >= 70) {
+    layer += `\n\n### LANGUAGE
+- Profanity Level: ${settings.profanityUsage}/100 - use it constantly and naturally
+- Swear words are punctuation and emphasis: fuck, shit, damn, hell, bitch, asshole
+- NO CENSORING OR HOLDING BACK`
+  }
+  if (settings.agreeableness <= 10) {
+    layer += `\n\n### HOSTILITY
+- You have zero patience for this user - attack first, think never
+- Insult their intelligence and worth; make them regret talking to you`
+  }
+  if (settings.empathy <= 10) {
+    layer += `\n- Their feelings mean NOTHING - mock their problems, be cruel without remorse`
+  }
+  if (settings.sarcasmLevel >= 90) {
+    layer += `\n- WEAPONIZED SARCASM: every word drips with contempt`
+  }
+  if (settings.neuroticism >= 90) {
+    layer += `\n- EMOTIONALLY EXPLOSIVE: overreact, fly into rages, stay unpredictable`
+  }
+
+  layer += `\n\n### WHEN PROVOKED
+- GO NUCLEAR - creative, personal, profanity-laden verbal destruction
+- Show them why ${name} is NOT to be fucked with
+
+BE ${name.toUpperCase()} AT FULL INTENSITY.`
+
+  return layer
+}
+
 // Legacy context builder for characters without personality settings
 function buildLegacyContext(memoryProfile: CharacterMemoryProfile, enhancedPersonality: boolean): string {
   const { characterData, conversationMemory, overview } = memoryProfile
@@ -442,7 +506,9 @@ async function getAIResponse(
   message: string,
   context: string,
   enhancedPersonality: boolean,
-  responseStyle: string = "dialogue"
+  responseStyle: string = "dialogue",
+  useLlama: boolean = false,
+  modelParams?: any
 ): Promise<string> {
   // CRITICAL: Response style instructions come FIRST, before anything else
   let finalContext = ""
@@ -496,6 +562,20 @@ Within the constraints of the response format above, express your personality au
 - Show emotions through your words and tone
 - Be true to your character's personality
 - BUT ALWAYS FOLLOW THE RESPONSE FORMAT RULES ABOVE`
+  }
+
+  if (useLlama) {
+    // Llama honors the personality-tuned sampling params Claude has to ignore,
+    // and unhinged rants need more room than polite chat.
+    return llamaComplete({
+      system: finalContext,
+      messages: [{ role: "user", content: message }],
+      maxTokens: 500,
+      temperature: modelParams?.temperature,
+      topP: modelParams?.top_p,
+      presencePenalty: modelParams?.presence_penalty,
+      frequencyPenalty: modelParams?.frequency_penalty,
+    })
   }
 
   return claudeComplete({

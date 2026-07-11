@@ -760,8 +760,6 @@ export default function AgentPage() {
           message: userMessage.content,
           nftId: params.id,
           memoryProfile: characterMemoryProfile,
-          provider: 'claude',
-          model: model,
           enhancedPersonality: enhancedPersonality,
           responseStyle: responseStyle,
         }),
