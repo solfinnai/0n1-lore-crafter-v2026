@@ -6,6 +6,7 @@ export * from "./accessories"
 export * from "./meta-traits"
 export * from "./world"
 export * from "./match"
+export * from "./selection-rules"
 
 import type { CanonTraitPower } from "./types"
 import { bodyTypePowers } from "./body-types"

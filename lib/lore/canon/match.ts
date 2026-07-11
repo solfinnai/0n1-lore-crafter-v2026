@@ -138,16 +138,28 @@ export function getCharacterPowerKit(traits: Trait[]): CharacterPowerKit {
   return kit
 }
 
-function pathsToText(label: string, paths?: { name: string; description: string }[]): string {
-  if (!paths || paths.length === 0) return ""
-  return `\n${label}:\n${paths.map((p) => `  - ${p.name}: ${p.description}`).join("\n")}`
+function isChosen(name: string, chosenPaths?: string[]): boolean {
+  if (!chosenPaths || chosenPaths.length === 0) return false
+  const n = normalize(name)
+  return chosenPaths.some((c) => normalize(c) === n)
 }
 
-function powerToText(p: CanonTraitPower): string {
+function pathsToText(label: string, paths?: { name: string; description: string }[], chosenPaths?: string[]): string {
+  if (!paths || paths.length === 0) return ""
+  const anyChosen = paths.some((p) => isChosen(p.name, chosenPaths))
+  return `\n${label}:\n${paths
+    .map((p) => {
+      const marker = anyChosen ? (isChosen(p.name, chosenPaths) ? " [CHOSEN PATH]" : " [unrealized potential - NOT chosen]") : ""
+      return `  - ${p.name}${marker}: ${p.description}`
+    })
+    .join("\n")}`
+}
+
+function powerToText(p: CanonTraitPower, chosenPaths?: string[]): string {
   let out = `${p.trait}${p.foundation ? ` (${p.foundation})` : ""}`
   if (p.corePowers) out += `\n${p.corePowers}`
-  out += pathsToText("Development paths", p.developmentPaths)
-  out += pathsToText("Advanced powers", p.advancedPowers)
+  out += pathsToText("Development paths", p.developmentPaths, chosenPaths)
+  out += pathsToText("Advanced powers", p.advancedPowers, chosenPaths)
   if (p.drawbacks) out += `\nDrawbacks: ${p.drawbacks}`
   if (p.counters) out += `\nCounters: ${p.counters}`
   if (p.notes) out += `\nCanon notes: ${p.notes}`
@@ -159,9 +171,13 @@ function powerToText(p: CanonTraitPower): string {
  * Use `concise: true` for chat system prompts (names + short descriptions);
  * the full version is for lore generation.
  */
-export function generatePowerKitContext(traits: Trait[], options: { concise?: boolean } = {}): string {
+export function generatePowerKitContext(
+  traits: Trait[],
+  options: { concise?: boolean; chosenPaths?: string[] } = {},
+): string {
   const kit = getCharacterPowerKit(traits)
   const sections: string[] = []
+  const { chosenPaths } = options
 
   if (kit.typeTier) {
     sections.push(
@@ -171,14 +187,23 @@ export function generatePowerKitContext(traits: Trait[], options: { concise?: bo
 
   if (kit.bodyType) {
     if (options.concise) {
-      const paths = kit.bodyType.developmentPaths?.map((p) => p.name).join(", ")
+      const allPaths = kit.bodyType.developmentPaths || []
+      const chosen = allPaths.filter((p) => isChosen(p.name, chosenPaths))
+      const pathText =
+        chosen.length > 0
+          ? ` CHOSEN development path${chosen.length === 1 ? "" : "s"} (the character's powers grow ONLY along these): ${chosen
+              .map((p) => `${p.name} - ${p.description}`)
+              .join("; ")}. Other paths are unrealized potential the character did NOT take.`
+          : allPaths.length > 0
+            ? ` Development paths: ${allPaths.map((p) => p.name).join(", ")}.`
+            : ""
       sections.push(
         `BODY TYPE - ${kit.bodyType.trait} (${kit.bodyType.foundation}): ${kit.bodyType.corePowers?.split(". ").slice(0, 3).join(". ")}.` +
-          (paths ? ` Development paths: ${paths}.` : "") +
+          pathText +
           (kit.bodyType.drawbacks ? ` Drawbacks: ${kit.bodyType.drawbacks}` : "")
       )
     } else {
-      sections.push(`BODY TYPE (core powers):\n${powerToText(kit.bodyType)}`)
+      sections.push(`BODY TYPE (core powers):\n${powerToText(kit.bodyType, chosenPaths)}`)
     }
   }
 
@@ -192,7 +217,7 @@ export function generatePowerKitContext(traits: Trait[], options: { concise?: bo
         )
       }
     } else {
-      sections.push(`${label}:\n${powers.map(powerToText).join("\n\n")}`)
+      sections.push(`${label}:\n${powers.map((p) => powerToText(p, chosenPaths)).join("\n\n")}`)
     }
   }
 
