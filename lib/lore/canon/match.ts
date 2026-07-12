@@ -45,6 +45,123 @@ function traitValue(traits: Trait[], type: string): string | null {
   return t ? String(t.value) : null
 }
 
+// -----------------------------------------------------------------------------
+// Trait classification - THE single source of truth for what each on-chain
+// trait means. Both the AI prompt text (generateTraitContext) and the
+// user-facing trait panel consume these entries, so they can never disagree.
+// Entries carry semantic facts + matched canon payloads; each consumer owns
+// its own wording.
+// -----------------------------------------------------------------------------
+
+export type PowerSlot = "body" | "face" | "extra" | "eyes" | "head"
+
+export type ClassifiedTrait =
+  /** A trait matched to a canonical power (lineage, mask, accessory...) */
+  | { trait: Trait; category: "power"; slot: PowerSlot; power: CanonTraitPower }
+  /** Body value not found in canon - no powers may be derived from it */
+  | { trait: Trait; category: "meta"; kind: "unknown-body" }
+  /** The artwork's backdrop color; passive resonance at most, never a lineage */
+  | { trait: Trait; category: "meta"; kind: "background"; resonance: BackgroundResonance | null }
+  | { trait: Trait; category: "meta"; kind: "tier"; tier: TypeTier | null }
+  | { trait: Trait; category: "meta"; kind: "house"; house: DomainInfo | null }
+  | { trait: Trait; category: "meta"; kind: "stat"; stat: CharacterStat | null }
+  /** Face: Void - a bare face, NOT a mask */
+  | { trait: Trait; category: "cosmetic"; kind: "bare-faced" }
+  /** Powerless face metadata (Vape, Bandaid, Glasses...) */
+  | { trait: Trait; category: "cosmetic"; kind: "face-detail" }
+  /** Mouth trait - personality flavor only */
+  | { trait: Trait; category: "cosmetic"; kind: "expression" }
+  /** Unpowered headwear */
+  | { trait: Trait; category: "cosmetic"; kind: "headwear" }
+  /** Hair, Wear, unpowered eyes/extras, and anything else cosmetic */
+  | { trait: Trait; category: "cosmetic"; kind: "appearance" }
+
+export function classifyTraits(traits: Trait[]): ClassifiedTrait[] {
+  return traits.map((trait): ClassifiedTrait => {
+    const type = normalize(trait.trait_type)
+    const value = String(trait.value)
+
+    switch (type) {
+      case "body": {
+        const power = findPower(bodyTypePowers, value)
+        return power
+          ? { trait, category: "power", slot: "body", power }
+          : { trait, category: "meta", kind: "unknown-body" }
+      }
+      case "face": {
+        const power = findPower(faceMaskPowers, value)
+        if (power) return { trait, category: "power", slot: "face", power }
+        if (normalize(value) === "void") return { trait, category: "cosmetic", kind: "bare-faced" }
+        if (faceMetadataTraits.some((t) => normalize(t) === normalize(value))) {
+          return { trait, category: "cosmetic", kind: "face-detail" }
+        }
+        return { trait, category: "cosmetic", kind: "appearance" }
+      }
+      case "extra": {
+        const power = findPower(extraPowers, value)
+        return power
+          ? { trait, category: "power", slot: "extra", power }
+          : { trait, category: "cosmetic", kind: "appearance" }
+      }
+      case "eyes": {
+        const power = findPower(eyePowers, value)
+        return power
+          ? { trait, category: "power", slot: "eyes", power }
+          : { trait, category: "cosmetic", kind: "appearance" }
+      }
+      case "head": {
+        const power = findPower(headPowers, value)
+        return power
+          ? { trait, category: "power", slot: "head", power }
+          : { trait, category: "cosmetic", kind: "headwear" }
+      }
+      case "background": {
+        const v = normalize(value)
+        return {
+          trait,
+          category: "meta",
+          kind: "background",
+          resonance: backgroundResonances.find((b) => normalize(b.trait) === v) ?? null,
+        }
+      }
+      case "type": {
+        const v = normalize(value)
+        return {
+          trait,
+          category: "meta",
+          kind: "tier",
+          tier: typeTiers.find((t) => normalize(t.trait) === v) ?? null,
+        }
+      }
+      case "domain": {
+        const v = normalize(value)
+        return {
+          trait,
+          category: "meta",
+          kind: "house",
+          house: domains.find((d) => normalize(d.trait) === v) ?? null,
+        }
+      }
+      case "spirit":
+      case "style":
+      case "strength": {
+        const def = statDefinitions.find((s) => normalize(s.category) === type)
+        const num = Number.parseInt(value, 10)
+        const stat =
+          def && !Number.isNaN(num)
+            ? { name: def.statName, role: def.role, value: num, description: def.description }
+            : null
+        return { trait, category: "meta", kind: "stat", stat }
+      }
+      case "mouth":
+        return { trait, category: "cosmetic", kind: "expression" }
+      default:
+        // Hair, Wear, Helmet, etc - cosmetic
+        return { trait, category: "cosmetic", kind: "appearance" }
+    }
+  })
+}
+
 export function getCharacterPowerKit(traits: Trait[]): CharacterPowerKit {
   const kit: CharacterPowerKit = {
     bodyType: null,
@@ -60,78 +177,46 @@ export function getCharacterPowerKit(traits: Trait[]): CharacterPowerKit {
     cosmeticTraits: [],
   }
 
-  for (const trait of traits) {
-    const type = normalize(trait.trait_type)
-    const value = String(trait.value)
-
-    switch (type) {
-      case "body": {
-        kit.bodyType = findPower(bodyTypePowers, value) ?? null
-        break
+  for (const entry of classifyTraits(traits)) {
+    if (entry.category === "power") {
+      switch (entry.slot) {
+        case "body":
+          kit.bodyType = entry.power
+          break
+        case "face":
+          kit.facePowers.push(entry.power)
+          break
+        case "extra":
+          kit.extraPowers.push(entry.power)
+          break
+        case "eyes":
+          kit.eyePowers.push(entry.power)
+          break
+        case "head":
+          kit.headPowers.push(entry.power)
+          break
       }
-      case "face": {
-        const p = findPower(faceMaskPowers, value)
-        if (p) kit.facePowers.push(p)
-        else kit.cosmeticTraits.push(trait)
-        break
+    } else if (entry.category === "meta") {
+      switch (entry.kind) {
+        case "unknown-body":
+          kit.bodyType = null
+          break
+        case "background":
+          kit.background = entry.resonance
+          break
+        case "tier":
+          kit.typeTier = entry.tier
+          break
+        case "house":
+          kit.domain = entry.house
+          break
+        case "stat":
+          if (entry.stat) kit.stats.push(entry.stat)
+          break
       }
-      case "extra": {
-        const p = findPower(extraPowers, value)
-        if (p) kit.extraPowers.push(p)
-        else kit.cosmeticTraits.push(trait)
-        break
-      }
-      case "eyes": {
-        const p = findPower(eyePowers, value)
-        if (p) kit.eyePowers.push(p)
-        else kit.cosmeticTraits.push(trait)
-        break
-      }
-      case "head": {
-        const p = findPower(headPowers, value)
-        if (p) kit.headPowers.push(p)
-        else kit.cosmeticTraits.push(trait)
-        break
-      }
-      case "background": {
-        const v = normalize(value)
-        kit.background =
-          backgroundResonances.find((b) => normalize(b.trait) === v) ?? null
-        break
-      }
-      case "type": {
-        const v = normalize(value)
-        kit.typeTier = typeTiers.find((t) => normalize(t.trait) === v) ?? null
-        break
-      }
-      case "domain": {
-        const v = normalize(value)
-        kit.domain = domains.find((d) => normalize(d.trait) === v) ?? null
-        break
-      }
-      case "spirit":
-      case "style":
-      case "strength": {
-        const def = statDefinitions.find((s) => normalize(s.category) === type)
-        const num = Number.parseInt(value, 10)
-        if (def && !Number.isNaN(num)) {
-          kit.stats.push({
-            name: def.statName,
-            role: def.role,
-            value: num,
-            description: def.description,
-          })
-        }
-        break
-      }
-      case "mouth": {
-        kit.mouthExpression = value
-        break
-      }
-      default: {
-        // Hair, Wear, Helmet, etc - cosmetic
-        kit.cosmeticTraits.push(trait)
-      }
+    } else {
+      if (entry.kind === "expression") kit.mouthExpression = String(entry.trait.value)
+      else kit.cosmeticTraits.push(entry.trait)
     }
   }
 
@@ -264,7 +349,8 @@ export function generatePowerKitContext(
  * kit, meta traits are labeled tier/stat/environment, and appearance-only
  * traits carry explicit "not a lineage / not a mask" guardrails. Replaces
  * the old raw `trait_type: value` dump that caused "Void mask" and
- * lineage-color confusion. Classification mirrors getCharacterPowerKit.
+ * lineage-color confusion. Built on classifyTraits - the same classification
+ * the user-facing trait panel renders, so prompt and UI can never disagree.
  */
 export function generateTraitContext(traits: Trait[]): string {
   if (!traits || traits.length === 0) return ""
@@ -273,64 +359,55 @@ export function generateTraitContext(traits: Trait[]): string {
   const meta: string[] = []
   const cosmetic: string[] = []
 
-  for (const trait of traits) {
-    const type = normalize(trait.trait_type)
-    const value = String(trait.value)
-    const line = `- ${trait.trait_type}: ${value}`
+  for (const entry of classifyTraits(traits)) {
+    const line = `- ${entry.trait.trait_type}: ${String(entry.trait.value)}`
 
-    switch (type) {
-      case "body": {
-        const p = findPower(bodyTypePowers, value)
-        if (p) powerBearing.push(`${line} (soul lineage - foundation: ${p.foundation}; exact powers below)`)
-        else meta.push(`${line} (unrecognized body type - do NOT invent powers for it)`)
-        break
-      }
-      case "face": {
-        if (findPower(faceMaskPowers, value)) {
+    if (entry.category === "power") {
+      switch (entry.slot) {
+        case "body":
+          powerBearing.push(`${line} (soul lineage - foundation: ${entry.power.foundation}; exact powers below)`)
+          break
+        case "face":
           powerBearing.push(`${line} (mask with canon powers, described below)`)
-        } else if (normalize(value) === "void") {
+          break
+        default:
+          powerBearing.push(`${line} (canon powers described below)`)
+      }
+    } else if (entry.category === "meta") {
+      switch (entry.kind) {
+        case "unknown-body":
+          meta.push(`${line} (unrecognized body type - do NOT invent powers for it)`)
+          break
+        case "background":
+          meta.push(`${line} (the artwork's backdrop color - at most a passive environmental resonance, NOT a lineage or body type)`)
+          break
+        case "tier":
+          meta.push(`${line} (power tier)`)
+          break
+        case "house":
+          meta.push(`${line} (House affiliation)`)
+          break
+        case "stat":
+          meta.push(`${line} (stat)`)
+          break
+      }
+    } else {
+      switch (entry.kind) {
+        case "bare-faced":
           cosmetic.push(`${line} (BARE-FACED - this character wears NO mask. Never mention a mask.)`)
-        } else if (faceMetadataTraits.some((t) => normalize(t) === normalize(value))) {
+          break
+        case "face-detail":
           cosmetic.push(`${line} (facial detail, appearance only - carries no powers)`)
-        } else {
+          break
+        case "headwear":
+          cosmetic.push(`${line} (headwear, appearance only - carries no powers)`)
+          break
+        case "expression":
+          cosmetic.push(`${line} (expression - personality flavor only, no powers)`)
+          break
+        default:
           cosmetic.push(`${line} (appearance only - carries no powers)`)
-        }
-        break
       }
-      case "extra": {
-        if (findPower(extraPowers, value)) powerBearing.push(`${line} (canon powers described below)`)
-        else cosmetic.push(`${line} (appearance only - carries no powers)`)
-        break
-      }
-      case "eyes": {
-        if (findPower(eyePowers, value)) powerBearing.push(`${line} (canon powers described below)`)
-        else cosmetic.push(`${line} (appearance only - carries no powers)`)
-        break
-      }
-      case "head": {
-        if (findPower(headPowers, value)) powerBearing.push(`${line} (canon powers described below)`)
-        else cosmetic.push(`${line} (headwear, appearance only - carries no powers)`)
-        break
-      }
-      case "background":
-        meta.push(`${line} (the artwork's backdrop color - at most a passive environmental resonance, NOT a lineage or body type)`)
-        break
-      case "type":
-        meta.push(`${line} (power tier)`)
-        break
-      case "domain":
-        meta.push(`${line} (House affiliation)`)
-        break
-      case "spirit":
-      case "style":
-      case "strength":
-        meta.push(`${line} (stat)`)
-        break
-      case "mouth":
-        cosmetic.push(`${line} (expression - personality flavor only, no powers)`)
-        break
-      default:
-        cosmetic.push(`${line} (appearance only - carries no powers)`)
     }
   }
 
