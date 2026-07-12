@@ -4,7 +4,7 @@ import {
   getDocumentById,
   searchDocumentsByTags,
 } from "@/lib/lore/documentation"
-import { generatePowerKitContext, hasCanonPowers } from "@/lib/lore/canon/match"
+import { generatePowerKitContext, generateTraitContext, hasCanonPowers } from "@/lib/lore/canon/match"
 import { districts, worldOverview } from "@/lib/lore/canon/world"
 import type { CharacterData } from "@/lib/types"
 
@@ -78,12 +78,10 @@ You are currently helping with the "${currentStep}" step${subStep ? ` (specifica
 function generateCharacterContext(characterData: CharacterData): string {
   let context = `\n\n## CHARACTER CONTEXT\n`
 
-  // Add traits
+  // Add traits, classified against canon so cosmetics can't be mistaken for
+  // lore (a raw dump here caused "Void mask" and color-word lineage mixups)
   if (characterData.traits && characterData.traits.length > 0) {
-    context += `\nTraits:\n`
-    characterData.traits.forEach((trait) => {
-      context += `- ${trait.trait_type}: ${trait.value}\n`
-    })
+    context += generateTraitContext(characterData.traits)
   }
 
   // Add other character info that's been filled in
