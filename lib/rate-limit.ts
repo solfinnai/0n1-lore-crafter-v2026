@@ -37,6 +37,52 @@ export const DAILY_LIMITS = {
   total_tokens: 200000   // Increased from 50k to 200k tokens per day
 }
 
+// Daily AI-call allowance for anonymous SAMPLE sessions, per IP. Sample users
+// all share the demo wallet address, so per-wallet caps can't be used (one
+// busy day would lock the sample for everyone globally); a per-IP daily cap
+// bounds worst-case spend per visitor instead.
+export const SAMPLE_DAILY_LIMIT = 30
+const sampleDailyCounts = new Map<string, { count: number; resetTime: number }>()
+
+/**
+ * Per-IP daily cap for sample (demo-wallet) sessions. Returns whether the
+ * request is allowed and decrements the day's remaining allowance.
+ */
+export function checkSampleDailyLimit(request: NextRequest): {
+  allowed: boolean
+  remaining: number
+  resetTime: number
+} {
+  const ip = getClientIP(request)
+  const now = Date.now()
+  const key = `sample:${ip}`
+  const entry = sampleDailyCounts.get(key)
+
+  if (!entry || now >= entry.resetTime) {
+    const resetTime = now + 24 * 60 * 60 * 1000
+    sampleDailyCounts.set(key, { count: 1, resetTime })
+    return { allowed: true, remaining: SAMPLE_DAILY_LIMIT - 1, resetTime }
+  }
+
+  if (entry.count >= SAMPLE_DAILY_LIMIT) {
+    return { allowed: false, remaining: 0, resetTime: entry.resetTime }
+  }
+
+  entry.count++
+  return { allowed: true, remaining: SAMPLE_DAILY_LIMIT - entry.count, resetTime: entry.resetTime }
+}
+
+/** Friendly limit message for sample sessions. */
+export function createSampleLimitResponse(resetTime: number) {
+  return {
+    error: "Sample limit reached",
+    message:
+      "You've used today's sample allowance. Own a 0N1? Connect your wallet for full access - or come back tomorrow.",
+    resetTime,
+    sampleLimit: true,
+  }
+}
+
 // Extract IP address from request (handles Vercel forwarding)
 export function getClientIP(request: NextRequest): string {
   // Check for forwarded IP (Vercel, Cloudflare, etc.)

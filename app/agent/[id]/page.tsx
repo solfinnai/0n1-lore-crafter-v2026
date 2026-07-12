@@ -762,6 +762,7 @@ export default function AgentPage() {
           memoryProfile: characterMemoryProfile,
           enhancedPersonality: enhancedPersonality,
           responseStyle: responseStyle,
+          walletAddress: address,
         }),
       })
 

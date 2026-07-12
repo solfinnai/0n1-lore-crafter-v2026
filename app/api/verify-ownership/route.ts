@@ -3,7 +3,8 @@ import { checkOwnershipRateLimit, createRateLimitResponse } from '@/lib/rate-lim
 import { COLLECTIONS, CollectionKey } from '@/lib/collection-config'
 import { withOptionalAuth, getRequestWalletAddress } from '@/lib/auth-middleware'
 import { isDevMode } from '@/lib/auth'
-import { isDemoWallet } from '@/lib/dev-mode'
+import { isDemoWallet, isSampleModeEnabled } from '@/lib/dev-mode'
+import { isSampleToken } from '@/lib/sample-token'
 
 const OPENSEA_API_KEY = process.env.OPENSEA_API_KEY
 
@@ -28,15 +29,20 @@ export const GET = withOptionalAuth(async (request: NextRequest, sessionInfo) =>
   console.log(`🔐 Ownership verification - Authentication status: ${sessionInfo.isAuthenticated ? 'AUTHENTICATED' : 'LEGACY_MODE'}`)
   console.log(`🔍 Verifying ownership for wallet: ${walletAddress}, tokenId: ${tokenId}`)
 
-  // Demo wallet in dev mode owns everything - lets the app be tested without an NFT
-  if (isDevMode() && isDemoWallet(walletAddress)) {
-    console.log(`🚧 DEV MODE: Granting ownership of #${tokenId} to demo wallet`)
+  // Demo wallet: in dev mode it owns everything (full local testing); in
+  // production sample mode it owns ONLY the pinned sample token. Never falls
+  // through to a real OpenSea lookup - the demo address owns nothing on-chain.
+  if (isDemoWallet(walletAddress)) {
+    const owns = isDevMode() || (isSampleModeEnabled() && isSampleToken(tokenId))
+    if (owns) {
+      console.log(`🚧 ${isDevMode() ? 'DEV' : 'SAMPLE'} MODE: Granting ownership of #${tokenId} to demo wallet`)
+    }
     return NextResponse.json({
-      owns: true,
-      ownedCollections: ['force'],
-      ownsForce: true,
+      owns,
+      ownedCollections: owns ? ['force'] : [],
+      ownsForce: owns,
       ownsFrame: false,
-      method: 'dev-mode',
+      method: isDevMode() ? 'dev-mode' : 'sample-mode',
       authenticated: sessionInfo.isAuthenticated
     })
   }

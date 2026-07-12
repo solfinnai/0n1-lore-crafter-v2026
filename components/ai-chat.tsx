@@ -9,6 +9,7 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/componen
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Sparkles, Send, RefreshCw, AlertCircle, Copy } from "lucide-react"
 import type { CharacterData } from "@/lib/types"
+import { useWallet } from "@/components/wallet/wallet-provider"
 import { toast } from "sonner"
 
 interface Message {
@@ -29,6 +30,7 @@ export function AiChat({ characterData, currentStep, subStep = null }: AiChatPro
   const [error, setError] = useState("")
   const [isCollapsed, setIsCollapsed] = useState(true)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const { address } = useWallet()
 
   // Add initial greeting message when component mounts or step changes
   useEffect(() => {
@@ -100,6 +102,7 @@ export function AiChat({ characterData, currentStep, subStep = null }: AiChatPro
           currentStep,
           subStep,
           messages: [...messages, { role: "user", content: userMessage }],
+          walletAddress: address,
         }),
       })
 

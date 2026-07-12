@@ -1,6 +1,7 @@
 // Hybrid storage implementation: localStorage (fast cache) + Supabase (persistence)
 import type { CharacterData } from "./types"
 import { supabase } from "./supabase"
+import { isDemoWallet } from "./dev-mode"
 import * as localStorage from "./storage"
 import type { StoredSoul } from "./storage"
 
@@ -22,9 +23,11 @@ export function setCurrentWalletAddress(address: string | null) {
   currentWalletAddress = address
 }
 
-// Check if Supabase is available
+// Check if Supabase is available. The shared demo/sample wallet must NEVER
+// sync: thousands of sample visitors would upsert souls under one address and
+// merge each other's data into their browsers.
 function isSupabaseAvailable(): boolean {
-  return supabase !== null && currentWalletAddress !== null
+  return supabase !== null && currentWalletAddress !== null && !isDemoWallet(currentWalletAddress)
 }
 
 // Get the last sync timestamp
