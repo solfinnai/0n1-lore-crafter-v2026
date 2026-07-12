@@ -59,12 +59,6 @@ export function getPowerByBodyType(bodyType: string): PowerType | undefined {
   return powerTypes.find((power) => power.bodyType.toLowerCase().trim() === normalizedBodyType)
 }
 
-// Helper function to get a default power type if body type is not found
-export function getDefaultPowerType(): PowerType {
-  // Citrine is the most common body type in the collection
-  return getPowerByBodyType("Citrine") || powerTypes[0]
-}
-
 // Helper function to get all body types
 export function getAllBodyTypes(): string[] {
   return powerTypes.map((power) => power.bodyType)

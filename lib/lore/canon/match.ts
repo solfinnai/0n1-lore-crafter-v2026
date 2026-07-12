@@ -1,7 +1,7 @@
 import type { Trait } from "@/lib/types"
 import type { CanonTraitPower, StatDefinition, TypeTier, BackgroundResonance, DomainInfo } from "./types"
 import { bodyTypePowers } from "./body-types"
-import { faceMaskPowers } from "./face-masks"
+import { faceMaskPowers, faceMetadataTraits } from "./face-masks"
 import { extraPowers, eyePowers, headPowers } from "./accessories"
 import { statDefinitions, typeTiers, backgroundResonances, domains } from "./meta-traits"
 
@@ -200,7 +200,10 @@ export function generatePowerKitContext(
       sections.push(
         `BODY TYPE - ${kit.bodyType.trait} (${kit.bodyType.foundation}): ${kit.bodyType.corePowers?.split(". ").slice(0, 3).join(". ")}.` +
           pathText +
-          (kit.bodyType.drawbacks ? ` Drawbacks: ${kit.bodyType.drawbacks}` : "")
+          (kit.bodyType.drawbacks ? ` Drawbacks: ${kit.bodyType.drawbacks}` : "") +
+          // The notes carry the lineage-disambiguation guardrails (e.g. Citrine
+          // vs Azurite); keep them even in concise mode so backstories stay in canon.
+          (kit.bodyType.notes ? ` Canon notes: ${kit.bodyType.notes}` : "")
       )
     } else {
       sections.push(`BODY TYPE (core powers):\n${powerToText(kit.bodyType, chosenPaths)}`)
@@ -227,7 +230,11 @@ export function generatePowerKitContext(
   group("HEAD POWERS", kit.headPowers)
 
   if (kit.background) {
-    sections.push(`BACKGROUND RESONANCE - ${kit.background.trait}: ${kit.background.effect}`)
+    sections.push(
+      `BACKGROUND RESONANCE - ${kit.background.trait}: ${kit.background.effect} ` +
+        `(This comes from the artwork's backdrop color. It is an ambient environmental buff only - NOT a lineage, bloodline, or body type. ` +
+        `If mentioned at all, describe it as an attunement to the character's surroundings; never as a "${kit.background.trait.toLowerCase()} resonance" of the character's soul or nature.)`
+    )
   }
 
   if (kit.domain) {
@@ -249,6 +256,95 @@ export function generatePowerKitContext(
   }
 
   return sections.join("\n\n")
+}
+
+/**
+ * Renders the NFT's trait list for prompts, classified so the model can't
+ * mistake cosmetics for lore: power-bearing traits point at the canon power
+ * kit, meta traits are labeled tier/stat/environment, and appearance-only
+ * traits carry explicit "not a lineage / not a mask" guardrails. Replaces
+ * the old raw `trait_type: value` dump that caused "Void mask" and
+ * lineage-color confusion. Classification mirrors getCharacterPowerKit.
+ */
+export function generateTraitContext(traits: Trait[]): string {
+  if (!traits || traits.length === 0) return ""
+
+  const powerBearing: string[] = []
+  const meta: string[] = []
+  const cosmetic: string[] = []
+
+  for (const trait of traits) {
+    const type = normalize(trait.trait_type)
+    const value = String(trait.value)
+    const line = `- ${trait.trait_type}: ${value}`
+
+    switch (type) {
+      case "body": {
+        const p = findPower(bodyTypePowers, value)
+        if (p) powerBearing.push(`${line} (soul lineage - foundation: ${p.foundation}; exact powers below)`)
+        else meta.push(`${line} (unrecognized body type - do NOT invent powers for it)`)
+        break
+      }
+      case "face": {
+        if (findPower(faceMaskPowers, value)) {
+          powerBearing.push(`${line} (mask with canon powers, described below)`)
+        } else if (normalize(value) === "void") {
+          cosmetic.push(`${line} (BARE-FACED - this character wears NO mask. Never mention a mask.)`)
+        } else if (faceMetadataTraits.some((t) => normalize(t) === normalize(value))) {
+          cosmetic.push(`${line} (facial detail, appearance only - carries no powers)`)
+        } else {
+          cosmetic.push(`${line} (appearance only - carries no powers)`)
+        }
+        break
+      }
+      case "extra": {
+        if (findPower(extraPowers, value)) powerBearing.push(`${line} (canon powers described below)`)
+        else cosmetic.push(`${line} (appearance only - carries no powers)`)
+        break
+      }
+      case "eyes": {
+        if (findPower(eyePowers, value)) powerBearing.push(`${line} (canon powers described below)`)
+        else cosmetic.push(`${line} (appearance only - carries no powers)`)
+        break
+      }
+      case "head": {
+        if (findPower(headPowers, value)) powerBearing.push(`${line} (canon powers described below)`)
+        else cosmetic.push(`${line} (headwear, appearance only - carries no powers)`)
+        break
+      }
+      case "background":
+        meta.push(`${line} (the artwork's backdrop color - at most a passive environmental resonance, NOT a lineage or body type)`)
+        break
+      case "type":
+        meta.push(`${line} (power tier)`)
+        break
+      case "domain":
+        meta.push(`${line} (House affiliation)`)
+        break
+      case "spirit":
+      case "style":
+      case "strength":
+        meta.push(`${line} (stat)`)
+        break
+      case "mouth":
+        cosmetic.push(`${line} (expression - personality flavor only, no powers)`)
+        break
+      default:
+        cosmetic.push(`${line} (appearance only - carries no powers)`)
+    }
+  }
+
+  let out = `\nTraits (from the NFT's on-chain metadata):\n`
+  if (powerBearing.length > 0) {
+    out += `\nPower-bearing traits:\n${powerBearing.join("\n")}\n`
+  }
+  if (meta.length > 0) {
+    out += `\nMeta traits (tier / stats / environment - never bloodlines):\n${meta.join("\n")}\n`
+  }
+  if (cosmetic.length > 0) {
+    out += `\nAppearance-only traits (these describe how the character LOOKS. NEVER derive powers, lineages, or lore concepts from these words. A gemstone color word here - Citrine, Azurite, Jasper, Pearl, Obsidian - is just a color, NOT a soul lineage):\n${cosmetic.join("\n")}\n`
+  }
+  return out
 }
 
 /** True when the NFT has at least one canon-powered trait matched */

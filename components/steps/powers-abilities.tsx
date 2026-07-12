@@ -10,7 +10,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
 import type { CharacterData } from "@/lib/types"
-import { getPowerByBodyType, getDefaultPowerType, type PowerType } from "@/lib/powers"
+import { getPowerByBodyType, type PowerType } from "@/lib/powers"
 import { getPathSelectionRules, getComboElements, type PathSelectionRules } from "@/lib/lore/canon/selection-rules"
 import { getCharacterPowerKit } from "@/lib/lore/canon/match"
 import { AlertTriangle } from "lucide-react"
@@ -24,6 +24,7 @@ interface PowersAbilitiesProps {
 
 export function PowersAbilities({ characterData, updateCharacterData, nextStep, prevStep }: PowersAbilitiesProps) {
   const [powerType, setPowerType] = useState<PowerType | null>(null)
+  const [resolvedTraits, setResolvedTraits] = useState(false)
   const [rules, setRules] = useState<PathSelectionRules | null>(null)
   const [typeTier, setTypeTier] = useState<string | null>(null)
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
@@ -45,21 +46,25 @@ export function PowersAbilities({ characterData, updateCharacterData, nextStep, 
       }
     }
 
-    const resolved = foundPowerType || getDefaultPowerType()
-    setPowerType(resolved)
+    // No fallback here: defaulting unmatched bodies to Citrine used to stamp
+    // the wrong canon powers onto edge-case NFTs. Unmatched -> manual entry.
+    setPowerType(foundPowerType)
+    setResolvedTraits(true)
 
     const kit = getCharacterPowerKit(characterData.traits || [])
     const tier = kit.typeTier?.trait ?? null
     setTypeTier(tier)
-    setRules(getPathSelectionRules(resolved.bodyType, tier))
+    setRules(foundPowerType ? getPathSelectionRules(foundPowerType.bodyType, tier) : null)
 
-    // Restore previously chosen paths from a saved soul
-    const pathNames = new Set(resolved.evolutionOptions.map((o) => o.name.toLowerCase()))
-    const savedPaths = (characterData.powersAbilities?.powers || []).filter((p) => pathNames.has(p.toLowerCase()))
-    setSelectedPaths(savedPaths)
+    if (foundPowerType) {
+      // Restore previously chosen paths from a saved soul
+      const pathNames = new Set(foundPowerType.evolutionOptions.map((o) => o.name.toLowerCase()))
+      const savedPaths = (characterData.powersAbilities?.powers || []).filter((p) => pathNames.has(p.toLowerCase()))
+      setSelectedPaths(savedPaths)
 
-    if (!characterData.powersAbilities?.description) {
-      setDescription(resolved.corePower.description)
+      if (!characterData.powersAbilities?.description) {
+        setDescription(foundPowerType.corePower.description)
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [characterData.traits])
@@ -93,7 +98,14 @@ export function PowersAbilities({ characterData, updateCharacterData, nextStep, 
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!powerType) return
+    if (!powerType) {
+      // Unrecognized body type: store the manually written description only
+      updateCharacterData({
+        powersAbilities: { powers: [], description },
+      })
+      nextStep()
+      return
+    }
     updateCharacterData({
       powersAbilities: {
         powers: [powerType.corePower.name, ...selectedPaths],
@@ -103,8 +115,56 @@ export function PowersAbilities({ characterData, updateCharacterData, nextStep, 
     nextStep()
   }
 
-  if (!powerType || !rules) {
+  if (!resolvedTraits) {
     return <div>Loading powers...</div>
+  }
+
+  // Body type not in canon (or no traits): let the user describe powers
+  // manually instead of falsely presenting another lineage's kit.
+  if (!powerType || !rules) {
+    return (
+      <div className="space-y-6">
+        <div className="space-y-2 text-center">
+          <h2 className="text-3xl font-bold tracking-tight">Powers & Abilities</h2>
+          <p className="text-muted-foreground">
+            This character's body type doesn't match a canonical power lineage, so describe their
+            powers in your own words.
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <div className="space-y-2">
+            <Label htmlFor="description">Power Description</Label>
+            <Textarea
+              id="description"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Describe how your character's powers work and connect to their traits..."
+              className="min-h-[150px] bg-background/50 border-purple-500/30 focus-visible:ring-purple-500"
+              required
+            />
+          </div>
+
+          <div className="flex justify-between pt-4">
+            <Button
+              type="button"
+              onClick={prevStep}
+              variant="outline"
+              className="border-purple-500/30 hover:bg-purple-900/20"
+            >
+              Previous
+            </Button>
+            <Button
+              type="submit"
+              disabled={!description.trim()}
+              className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
+            >
+              Continue
+            </Button>
+          </div>
+        </form>
+      </div>
+    )
   }
 
   const remaining = maxPaths - selectedPaths.length
