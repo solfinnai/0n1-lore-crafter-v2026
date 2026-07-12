@@ -13,6 +13,9 @@ try {
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Pin the tracing root to this project so a stray lockfile in the home
+  // directory doesn't make Next infer the wrong workspace root.
+  outputFileTracingRoot: new URL('.', import.meta.url).pathname,
   eslint: {
     ignoreDuringBuilds: true,
   },
