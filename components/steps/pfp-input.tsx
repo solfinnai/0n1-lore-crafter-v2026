@@ -14,6 +14,7 @@ import { useWallet } from "@/components/wallet/wallet-provider"
 import { soulExistsForNft } from "@/lib/storage-wrapper"
 import { useRouter } from "next/navigation"
 import { NftTraitsSidebar } from "@/components/nft-traits-sidebar"
+import { isSampleModeEnabled } from "@/lib/dev-mode"
 
 interface PfpInputProps {
   characterData: CharacterData
@@ -170,7 +171,11 @@ export function PfpInput({ characterData, updateCharacterData, nextStep }: PfpIn
       {!isConnected && (
         <div className="text-center p-6 border border-purple-500/30 rounded-lg bg-black/60 backdrop-blur-sm">
           <p className="text-purple-300 mb-4">Connect your wallet to see your 0N1 Force NFTs</p>
-          <p className="text-sm text-purple-200/70">You need to connect your wallet to continue</p>
+          <p className="text-sm text-purple-200/70">
+            {isSampleModeEnabled()
+              ? "No wallet or 0N1? Tap “Try Sample 0N1” above to craft a soul for 0N1 #922 - the full experience, no wallet needed. Your work is saved in this browser."
+              : "You need to connect your wallet to continue"}
+          </p>
         </div>
       )}
 

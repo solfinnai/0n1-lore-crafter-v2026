@@ -17,3 +17,13 @@ export function isDemoWallet(address: string | null | undefined): boolean {
 export function isClientDemoModeEnabled(): boolean {
   return process.env.NEXT_PUBLIC_DEV_MODE === "true"
 }
+
+// Sample mode - the PRODUCTION-safe subset of demo mode. Unlocks ONLY the demo
+// wallet with ONLY the pinned sample token (see lib/sample-token.ts), so
+// visitors without a wallet can try the whole app. Unlike isDevMode() it is
+// deliberately NOT tied to NODE_ENV; unlike dev mode it grants no blanket
+// ownership and loosens nothing else. Works on both server and client
+// (NEXT_PUBLIC_ vars are inlined client-side and readable server-side).
+export function isSampleModeEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_ENABLE_SAMPLE_MODE === "true"
+}

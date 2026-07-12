@@ -63,7 +63,7 @@ export function Header() {
             </Button>
           )}
           <SyncStatus />
-          <WalletConnectButton />
+          <WalletConnectButton compact />
         </div>
       </div>
     </header>

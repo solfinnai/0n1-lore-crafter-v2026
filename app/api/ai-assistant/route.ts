@@ -5,8 +5,11 @@ import {
   checkChatRateLimit,
   createRateLimitResponse,
   checkDailyUsage,
-  createDailyLimitResponse
+  createDailyLimitResponse,
+  checkSampleDailyLimit,
+  createSampleLimitResponse
 } from '@/lib/rate-limit'
+import { isDemoWallet } from '@/lib/dev-mode'
 import { claudeComplete, isClaudeConfigured } from '@/lib/ai/claude'
 
 export async function POST(request: NextRequest) {
@@ -69,8 +72,28 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Check daily usage limits per wallet if wallet address is available
-    if (walletAddress) {
+    // Sample sessions (shared demo wallet): per-IP daily allowance. When it
+    // runs out, degrade gracefully to the preset suggestions.
+    if (isDemoWallet(walletAddress)) {
+      const sampleLimit = checkSampleDailyLimit(request)
+      if (!sampleLimit.allowed) {
+        return NextResponse.json(
+          {
+            error: "Sample limit reached",
+            fallback: true,
+            suggestions: getMockSuggestions(currentStep, subStep),
+            sampleLimitInfo: createSampleLimitResponse(sampleLimit.resetTime),
+          },
+          { status: 200 },
+        )
+      }
+    }
+
+    // Check daily usage limits per wallet if wallet address is available.
+    // The shared demo wallet is excluded - sample sessions are capped per-IP
+    // above; pooling them into one wallet bucket would lock all sample users
+    // out together.
+    if (walletAddress && !isDemoWallet(walletAddress)) {
       // AI assistant suggestions are lighter than full chat responses
       const estimatedTokens = Math.ceil(300 / 4) // Estimated tokens for AI assistant response
       
@@ -126,9 +149,9 @@ export async function POST(request: NextRequest) {
       // Remove any asterisk formatting from suggestions
       const cleanSuggestions = suggestions.map(suggestion => removeAsteriskFormatting(suggestion))
 
-      // Add usage info to response headers
+      // Add usage info to response headers (not for the shared demo wallet)
       const responseHeaders: Record<string, string> = {}
-      if (walletAddress) {
+      if (walletAddress && !isDemoWallet(walletAddress)) {
         const currentUsage = checkDailyUsage(walletAddress, 'ai_messages', 0)
         if (currentUsage.allowed) {
           responseHeaders['X-Daily-Remaining-AI-Messages'] = currentUsage.remaining.aiMessages.toString()

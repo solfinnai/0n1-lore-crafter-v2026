@@ -7,6 +7,13 @@
       "runtimeArgs": ["pnpm@9", "run", "dev"],
       "port": 3000,
       "autoPort": true
+    },
+    {
+      "name": "prod",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["pnpm@9", "run", "start"],
+      "port": 3000,
+      "autoPort": true
     }
   ]
 }

@@ -2,7 +2,7 @@
 
 import type React from "react"
 import { createContext, useContext, useState, useEffect } from "react"
-import { DEMO_WALLET_ADDRESS, isClientDemoModeEnabled } from "@/lib/dev-mode"
+import { DEMO_WALLET_ADDRESS, isClientDemoModeEnabled, isSampleModeEnabled } from "@/lib/dev-mode"
 // Wallet address is now handled directly in components
 
 // Extend Window interface to include ethereum
@@ -136,11 +136,13 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  // Demo mode: connect with a fake wallet (no MetaMask needed). Only used when
-  // NEXT_PUBLIC_DEV_MODE=true - the server also gates demo data behind dev mode.
+  // Demo/sample mode: connect with the reserved demo address (no MetaMask
+  // needed). Enabled by NEXT_PUBLIC_DEV_MODE=true (dev, full demo set) or
+  // NEXT_PUBLIC_ENABLE_SAMPLE_MODE=true (production, sample token only) -
+  // the server gates what this address can actually see either way.
   const connectDemo = () => {
-    if (!isClientDemoModeEnabled()) {
-      setError("Demo mode is not enabled. Set NEXT_PUBLIC_DEV_MODE=true in .env.local.")
+    if (!isClientDemoModeEnabled() && !isSampleModeEnabled()) {
+      setError("Demo mode is not enabled. Set NEXT_PUBLIC_DEV_MODE=true or NEXT_PUBLIC_ENABLE_SAMPLE_MODE=true.")
       return
     }
     setError(null)

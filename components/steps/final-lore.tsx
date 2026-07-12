@@ -17,6 +17,7 @@ import { useRouter } from "next/navigation"
 import { storeSoul, initializeHybridStorage, setCurrentWalletAddress } from "@/lib/storage-wrapper"
 import { toast } from "sonner"
 import { useWallet } from "@/components/wallet/wallet-provider"
+import { isDemoWallet } from "@/lib/dev-mode"
 
 interface FinalLoreProps {
   characterData: CharacterData
@@ -413,6 +414,13 @@ export function FinalLore({ characterData, updateCharacterData, prevStep }: Fina
               Export JSON
             </Button>
           </div>
+
+          {isDemoWallet(address) && (
+            <p className="text-center text-sm text-purple-300/80 mt-4">
+              Enjoying the sample? Souls are saved in this browser. Own a 0N1? Connect your wallet
+              to craft souls for your own characters.
+            </p>
+          )}
         </div>
       </div>
     </div>

@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Sparkles, RefreshCw, AlertCircle } from "lucide-react"
 import { getCharacterPowerKit } from "@/lib/lore/canon/match"
 import { useTraitsPanel } from "@/components/traits-panel-context"
+import { useWallet } from "@/components/wallet/wallet-provider"
 import type { CharacterData } from "@/lib/types"
 
 interface AiAssistantProps {
@@ -30,6 +31,7 @@ export function AiAssistant({
   const [usingFallback, setUsingFallback] = useState(false)
   const [lastSubStep, setLastSubStep] = useState<string | null>(null)
   const traitsPanel = useTraitsPanel()
+  const { address } = useWallet()
 
   // Deterministic attribution line, computed from the same canon classifier
   // the prompt uses - never from the AI - so it can't hallucinate. Shows
@@ -277,6 +279,7 @@ export function AiAssistant({
             characterData,
             currentStep,
             subStep,
+            walletAddress: address,
           }),
         })
 

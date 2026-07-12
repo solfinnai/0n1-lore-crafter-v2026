@@ -1,4 +1,5 @@
 import type { Trait, OpenSeaTrait } from "@/lib/types"
+import { SAMPLE_TOKEN_ID, SAMPLE_TOKEN_TRAITS, SAMPLE_TOKEN_IMAGE } from "@/lib/sample-token"
 
 export const OPENSEA_API_KEY = process.env.OPENSEA_API_KEY
 export const CONTRACT_ADDRESS = "0x3bf2922f4520a8ba0c2efc3d2a1539678dad5e9d" // 0N1 Force contract address
@@ -11,6 +12,13 @@ export async function fetchNftData(tokenId: string): Promise<{ traits: Trait[]; 
   try {
     // Normalize token ID by removing leading zeros
     const normalizedTokenId = tokenId.replace(/^0+/, "")
+
+    // The permanent sample token is served from pinned, verbatim OpenSea data
+    // (lib/sample-token.ts) so it always loads with its REAL traits - never
+    // the mock fallback - even when the OpenSea API is down or the key expired.
+    if (normalizedTokenId === SAMPLE_TOKEN_ID) {
+      return { traits: SAMPLE_TOKEN_TRAITS, imageUrl: SAMPLE_TOKEN_IMAGE }
+    }
 
     // Check if we already have a pending request for this token
     if (requestCache.has(normalizedTokenId)) {

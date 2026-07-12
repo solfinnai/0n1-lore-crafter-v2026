@@ -4,9 +4,9 @@ import { Button } from "@/components/ui/button"
 import { Loader2, Wallet, LogOut, FlaskConical } from "lucide-react"
 import { useWallet } from "./wallet-provider"
 import { shortenAddress } from "@/lib/wallet"
-import { isClientDemoModeEnabled, isDemoWallet } from "@/lib/dev-mode"
+import { isClientDemoModeEnabled, isDemoWallet, isSampleModeEnabled } from "@/lib/dev-mode"
 
-export function WalletConnectButton() {
+export function WalletConnectButton({ compact = false }: { compact?: boolean } = {}) {
   const { address, isConnected, isConnecting, connect, connectDemo, disconnect, error } = useWallet()
 
   const handleConnect = () => {
@@ -27,7 +27,11 @@ export function WalletConnectButton() {
             className="bg-purple-900/50 hover:bg-purple-900/70 text-purple-100 border-purple-500/50"
           >
             <div className="w-2 h-2 rounded-full bg-green-500 mr-2"></div>
-            {isDemoWallet(address) ? "Demo Wallet" : shortenAddress(address || "")}
+            {isDemoWallet(address)
+              ? isClientDemoModeEnabled()
+                ? "Demo Wallet"
+                : "Sample Mode"
+              : shortenAddress(address || "")}
           </Button>
           <Button variant="destructive" size="icon" onClick={handleDisconnect} title="Disconnect wallet">
             <LogOut className="h-4 w-4" />
@@ -52,15 +56,17 @@ export function WalletConnectButton() {
               </>
             )}
           </Button>
-          {isClientDemoModeEnabled() && (
+          {(isClientDemoModeEnabled() || isSampleModeEnabled()) && (
             <Button
               onClick={connectDemo}
               variant="outline"
-              className="border-purple-500/50 text-purple-300 hover:bg-purple-900/50"
+              // In compact placements (the header) the second button overflows
+              // small screens - the landing page has its own prominent CTA there.
+              className={`border-purple-500/50 text-purple-300 hover:bg-purple-900/50 ${compact ? "hidden sm:inline-flex" : ""}`}
               title="Try the app without MetaMask or an NFT"
             >
               <FlaskConical className="mr-2 h-4 w-4" />
-              Demo Mode
+              {isClientDemoModeEnabled() ? "Demo Mode" : "Try Sample 0N1"}
             </Button>
           )}
         </div>

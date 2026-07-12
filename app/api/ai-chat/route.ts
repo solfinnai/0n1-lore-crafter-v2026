@@ -4,8 +4,11 @@ import {
   checkChatRateLimit,
   createRateLimitResponse,
   checkDailyUsage,
-  createDailyLimitResponse
+  createDailyLimitResponse,
+  checkSampleDailyLimit,
+  createSampleLimitResponse
 } from '@/lib/rate-limit'
+import { isDemoWallet } from '@/lib/dev-mode'
 import { claudeComplete, isClaudeConfigured } from '@/lib/ai/claude'
 import { llamaComplete, isLlamaConfigured } from '@/lib/ai/llama'
 import { generatePowerKitContext, hasCanonPowers } from '@/lib/lore/canon/match'
@@ -65,7 +68,17 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json()
-    
+
+    // Sample sessions (shared demo wallet) get a per-IP daily allowance -
+    // bounds anonymous AI spend without per-wallet caps, which would pool all
+    // sample users into one global bucket.
+    if (isDemoWallet(body.walletAddress)) {
+      const sampleLimit = checkSampleDailyLimit(request)
+      if (!sampleLimit.allowed) {
+        return NextResponse.json(createSampleLimitResponse(sampleLimit.resetTime), { status: 429 })
+      }
+    }
+
     // Check if this is a character creation chat request (simpler format)
     if (body.characterData && body.currentStep && !body.memoryProfile) {
       return handleCharacterCreationChat(body as CharacterCreationChatRequest)
@@ -82,8 +95,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Check daily usage limits per wallet if wallet address is available
+    // (never the shared demo wallet - sample sessions are capped per-IP above)
     const walletAddress = memoryProfile.metadata?.walletAddress
-    if (walletAddress) {
+    if (walletAddress && !isDemoWallet(walletAddress)) {
       // Estimate token count (rough approximation: 1 token ≈ 4 characters)
       const estimatedTokens = Math.ceil((message.length + 500) / 4) // Message + expected response
       
