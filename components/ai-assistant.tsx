@@ -1,9 +1,11 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Sparkles, RefreshCw, AlertCircle } from "lucide-react"
+import { getCharacterPowerKit } from "@/lib/lore/canon/match"
+import { useTraitsPanel } from "@/components/traits-panel-context"
 import type { CharacterData } from "@/lib/types"
 
 interface AiAssistantProps {
@@ -27,6 +29,30 @@ export function AiAssistant({
   const [error, setError] = useState("")
   const [usingFallback, setUsingFallback] = useState(false)
   const [lastSubStep, setLastSubStep] = useState<string | null>(null)
+  const traitsPanel = useTraitsPanel()
+
+  // Deterministic attribution line, computed from the same canon classifier
+  // the prompt uses - never from the AI - so it can't hallucinate. Shows
+  // users which traits ground the suggestions (e.g. that "daylight
+  // attunement" comes from the Citrine backdrop, not from nowhere).
+  const groundedIn = useMemo(() => {
+    if (!characterData.traits || characterData.traits.length === 0) return null
+    const kit = getCharacterPowerKit(characterData.traits)
+    const parts: string[] = []
+    if (kit.bodyType) {
+      parts.push(
+        kit.bodyType.foundation
+          ? `${kit.bodyType.trait} body (${kit.bodyType.foundation.toLowerCase()})`
+          : `${kit.bodyType.trait} body`,
+      )
+    }
+    if (kit.typeTier) parts.push(`${kit.typeTier.trait} tier`)
+    for (const p of [...kit.facePowers, ...kit.extraPowers, ...kit.eyePowers, ...kit.headPowers]) {
+      parts.push(p.trait)
+    }
+    if (kit.background) parts.push(`${kit.background.trait} backdrop (passive buff)`)
+    return parts.length > 0 ? parts.join(" · ") : null
+  }, [characterData.traits])
 
   // Track when subStep changes to trigger a refresh
   useEffect(() => {
@@ -404,6 +430,24 @@ export function AiAssistant({
                 <div className="text-xs text-amber-400 mt-2 flex items-center">
                   <AlertCircle className="h-3 w-3 mr-1" />
                   Using preset suggestions. Set ANTHROPIC_API_KEY in .env.local to enable AI generation.
+                </div>
+              )}
+
+              {groundedIn && suggestions.length > 0 && (
+                <div className="text-xs text-purple-300/70 mt-2 pt-2 border-t border-purple-500/15">
+                  Grounded in your 0N1's traits: {groundedIn}
+                  {traitsPanel && (
+                    <>
+                      {" — "}
+                      <button
+                        type="button"
+                        onClick={traitsPanel.openTraitsPanel}
+                        className="underline underline-offset-2 text-purple-300 hover:text-purple-200"
+                      >
+                        what do these mean?
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
             </>
