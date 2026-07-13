@@ -6,7 +6,7 @@
  * logged-out (handoff §7.1).
  */
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import type { User } from "@supabase/supabase-js"
 import { Loader2, LogOut, Mail, UserCircle, Wallet } from "lucide-react"
 import { toast } from "sonner"
@@ -24,6 +24,12 @@ import { Separator } from "@/components/ui/separator"
 import { supabase } from "@/lib/supabase"
 import { authHeaders } from "@/lib/auth-headers"
 import { shortenAddress } from "@/lib/wallet"
+import {
+  describeWalletError,
+  discoverWalletProvider,
+  requestAccounts,
+  withWalletTimeout,
+} from "@/lib/wallet-request"
 import { useSupabaseSession } from "@/components/auth/session-provider"
 
 /** Best-effort human label for a Supabase user (email or linked wallet). */
@@ -49,6 +55,9 @@ export function SignInButton() {
   const [walletBusy, setWalletBusy] = useState(false)
   const [signOutBusy, setSignOutBusy] = useState(false)
   const [linkBusy, setLinkBusy] = useState(false)
+  // Bumped whenever the dialog resets so a wallet promise that settles late
+  // (after a timeout or dismissal) can't close a reopened dialog or toast.
+  const walletAttemptRef = useRef(0)
 
   // No Supabase project configured: accounts don't exist, hide entirely.
   if (!isEnabled) return null
@@ -56,6 +65,7 @@ export function SignInButton() {
   const busy = emailBusy || walletBusy
 
   const resetFlow = () => {
+    walletAttemptRef.current += 1
     setView("methods")
     setCode("")
     setEmailBusy(false)
@@ -112,27 +122,41 @@ export function SignInButton() {
 
   const handleWalletSignIn = async () => {
     if (!supabase) return
-    if (typeof window === "undefined" || !window.ethereum) {
+    // EIP-6963 discovery: with several wallet extensions installed, bare
+    // window.ethereum may belong to one that never shows UI — prefer MetaMask.
+    const provider = discoverWalletProvider()
+    if (!provider) {
       toast.error("No Ethereum wallet found", {
         description: "Install MetaMask (or another wallet) to sign in with a wallet.",
       })
       return
     }
+    const attempt = ++walletAttemptRef.current
     setWalletBusy(true)
     try {
-      const { error } = await supabase.auth.signInWithWeb3({
-        chain: "ethereum",
-        statement: "Sign in to 0N1 Lore Crafter",
-      })
+      // Request account access ourselves first: it carries the deadline, and
+      // auth-js's internal eth_requestAccounts (which would otherwise swallow
+      // the real error) then resolves instantly from the granted permission.
+      await requestAccounts(provider)
+      const { error } = await withWalletTimeout(
+        supabase.auth.signInWithWeb3({
+          chain: "ethereum",
+          statement: "Sign in to 0N1 Lore Crafter",
+          // auth-js's EthereumWallet type demands an `address` field the
+          // runtime never reads; injected EIP-1193 providers don't carry one.
+          wallet: provider as never,
+        }),
+        "The wallet signature request",
+      )
       if (error) throw error
+      if (attempt !== walletAttemptRef.current) return
       closeDialog()
       toast.success("Signed in with wallet")
     } catch (e) {
-      toast.error("Wallet sign-in failed", {
-        description: e instanceof Error ? e.message : undefined,
-      })
+      if (attempt !== walletAttemptRef.current) return
+      toast.error("Wallet sign-in failed", { description: describeWalletError(e) })
     } finally {
-      setWalletBusy(false)
+      if (attempt === walletAttemptRef.current) setWalletBusy(false)
     }
   }
 
@@ -142,7 +166,8 @@ export function SignInButton() {
    * server-built message → verify. The server stores the row in linked_wallets.
    */
   const handleLinkWallet = async () => {
-    if (typeof window === "undefined" || !window.ethereum) {
+    const provider = discoverWalletProvider()
+    if (!provider) {
       toast.error("No Ethereum wallet found", {
         description: "Install MetaMask (or another wallet) to link a wallet.",
       })
@@ -150,9 +175,7 @@ export function SignInButton() {
     }
     setLinkBusy(true)
     try {
-      const accounts: string[] = await window.ethereum.request({
-        method: "eth_requestAccounts",
-      })
+      const accounts = await requestAccounts(provider)
       const address = accounts?.[0]
       if (!address) throw new Error("No wallet account selected")
 
@@ -162,6 +185,7 @@ export function SignInButton() {
         method: "POST",
         headers,
         body: JSON.stringify({ address }),
+        signal: AbortSignal.timeout(15_000),
       })
       const challenge = await challengeRes.json().catch(() => ({}))
       if (!challengeRes.ok) {
@@ -177,10 +201,13 @@ export function SignInButton() {
       // it server-side and recovers the signer from this signature.
       let signature: string
       try {
-        signature = await window.ethereum.request({
-          method: "personal_sign",
-          params: [challenge.message, address],
-        })
+        signature = await withWalletTimeout(
+          provider.request({
+            method: "personal_sign",
+            params: [challenge.message, address],
+          }),
+          "The wallet signature request",
+        )
       } catch (signError: any) {
         const rejected =
           signError?.code === 4001 ||
@@ -188,9 +215,7 @@ export function SignInButton() {
         toast.error(rejected ? "Signature request rejected" : "Couldn't sign the link message", {
           description: rejected
             ? "You declined the signature in your wallet — nothing was linked."
-            : signError instanceof Error
-              ? signError.message
-              : undefined,
+            : describeWalletError(signError),
         })
         return
       }
@@ -199,6 +224,7 @@ export function SignInButton() {
         method: "POST",
         headers,
         body: JSON.stringify({ address: challenge.address, signature }),
+        signal: AbortSignal.timeout(15_000),
       })
       const verify = await verifyRes.json().catch(() => ({}))
       if (!verifyRes.ok) {

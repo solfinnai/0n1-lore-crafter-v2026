@@ -3,6 +3,7 @@
 import type React from "react"
 import { createContext, useContext, useState, useEffect } from "react"
 import { DEMO_WALLET_ADDRESS, isClientDemoModeEnabled, isSampleModeEnabled } from "@/lib/dev-mode"
+import { describeWalletError, discoverWalletProvider, requestAccounts } from "@/lib/wallet-request"
 // Wallet address is now handled directly in components
 
 // Extend Window interface to include ethereum
@@ -94,7 +95,10 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   }, [address, isConnected])
 
   const connect = async () => {
-    if (!isMetaMaskAvailable()) {
+    // EIP-6963 discovery so a second wallet extension can't silently swallow
+    // the request; falls back to window.ethereum.
+    const provider = discoverWalletProvider()
+    if (!provider) {
       setError("MetaMask is not installed. Please install MetaMask to connect your wallet.")
       return
     }
@@ -104,10 +108,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
     try {
       console.log("Requesting accounts from MetaMask...")
-      console.log("Current URL:", window.location.href)
-      console.log("Ethereum object:", window.ethereum)
-      
-      const accounts = await window.ethereum!.request({ method: "eth_requestAccounts" })
+      // Deadline-raced: MetaMask can leave this pending forever (locked wallet,
+      // unnoticed popup) and the spinner must always be able to reset.
+      const accounts = await requestAccounts(provider)
       console.log("MetaMask accounts:", accounts)
 
       if (accounts.length > 0) {
@@ -121,16 +124,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       }
     } catch (err: any) {
       console.error("Error connecting wallet:", err)
-      console.error("Error code:", err.code)
-      console.error("Error message:", err.message)
-      
-      if (err.code === 4001) {
-        setError("Connection rejected. Please approve the connection in MetaMask.")
-      } else if (err.code === -32002) {
-        setError("MetaMask is already processing a request. Please check MetaMask.")
-      } else {
-        setError(`Failed to connect wallet: ${err.message || "Unknown error"}`)
-      }
+      setError(describeWalletError(err))
     } finally {
       setIsConnecting(false)
     }
