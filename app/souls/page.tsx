@@ -26,6 +26,7 @@ import { getCharacterMemories } from "@/lib/memory"
 import { generatePreviewText, getPreviewTextColor } from "@/lib/preview-text-generator"
 import { useWallet } from "@/components/wallet/wallet-provider"
 import { CanonExportDialog } from "@/components/canon-export-dialog"
+import { BackupControls } from "@/components/backup-controls"
 import type { CharacterData } from "@/lib/types"
 
 export default function SoulsPage() {
@@ -185,13 +186,19 @@ export default function SoulsPage() {
                 Soul Collection
               </h1>
             </div>
-            <Button
-              onClick={() => router.push("/")}
-              className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
-            >
-              Create New Soul
-            </Button>
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+              <BackupControls onImported={() => window.location.reload()} />
+              <Button
+                onClick={() => router.push("/")}
+                className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
+              >
+                Create New Soul
+              </Button>
+            </div>
           </div>
+          <p className="text-xs text-purple-300/60 mt-2">
+            Your souls live in this browser - download a backup to keep them safe or move devices.
+          </p>
         </div>
       </div>
 
