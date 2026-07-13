@@ -44,6 +44,18 @@ export function createUserScopedClient(authHeader: string): SupabaseClient | nul
   })
 }
 
+/**
+ * Anonymous (no-session) client for routes serving logged-out callers — only
+ * anon-executable RPCs and anon-visible rows are reachable through it.
+ */
+export function createAnonClient(): SupabaseClient | null {
+  const env = getSupabaseEnv()
+  if (!env) return null
+  return createClient(env.url, env.anonKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  })
+}
+
 export interface RequestUser {
   user: User
   /** RLS-enforced client scoped to this user's JWT. */

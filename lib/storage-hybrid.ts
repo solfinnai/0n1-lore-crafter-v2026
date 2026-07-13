@@ -39,8 +39,10 @@ const OWNER_KEY = "oni-content-owner"
 
 // Every localStorage key that holds user-created content or sync bookkeeping.
 // Mirrors the content set in lib/backup.ts (EXACT_KEYS + PREFIX_KEYS) and adds
-// the four soul-sync keys. On an authenticated-owner change we wipe all of
-// these so one account's souls/chats can never bleed into another's session.
+// the four soul-sync keys. On an authenticated-owner change all of these are
+// PARKED under the outgoing owner's namespace (never deleted) so one account's
+// souls/chats can't bleed into another's session yet nothing is ever lost —
+// most of this content (chats, memories, archives) has NO cloud copy.
 const CONTENT_KEYS = [
   "oni-souls",
   DIRTY_KEY,
@@ -97,27 +99,106 @@ function clearContentOwner() {
   window.localStorage.removeItem(OWNER_KEY)
 }
 
-/**
- * Wipe every content + sync key from localStorage. Used when the authenticated
- * owner of the browser changes, so no account's souls/chats survive into a
- * different account's (or another person's) session. Does NOT touch the owner
- * key itself (managed by the caller) or non-content prefs (e.g. onboarding).
- */
-function clearLocalContent() {
-  if (typeof window === "undefined") return
-  const ls = window.localStorage
-  const toRemove: string[] = []
+// Namespace where an owner's content sits while a different identity is
+// active. Identity transitions MOVE keys here (and back) instead of deleting:
+// auth events are structurally incapable of destroying content.
+const PARKED_PREFIX = "oni-parked"
+
+function parkedKeyFor(owner: string, key: string): string {
+  return `${PARKED_PREFIX}:${owner}:${key}`
+}
+
+function isContentKey(key: string): boolean {
+  return (
+    (CONTENT_KEYS as readonly string[]).includes(key) ||
+    CONTENT_KEY_PREFIXES.some((p) => key.startsWith(p))
+  )
+}
+
+function listLiveContentKeys(ls: Storage): string[] {
+  const keys: string[] = []
   for (let i = 0; i < ls.length; i++) {
     const key = ls.key(i)
-    if (!key) continue
-    if (
-      (CONTENT_KEYS as readonly string[]).includes(key) ||
-      CONTENT_KEY_PREFIXES.some((p) => key.startsWith(p))
-    ) {
-      toRemove.push(key)
+    if (key && isContentKey(key)) keys.push(key)
+  }
+  return keys
+}
+
+/** Merge two StoredSoul arrays by nft_id (data.pfpId), newer lastUpdated wins. */
+function mergeSoulArrays(a: string, b: string): string {
+  const parse = (raw: string): StoredSoul[] => {
+    try {
+      const v = JSON.parse(raw)
+      return Array.isArray(v) ? v : []
+    } catch {
+      return []
     }
   }
-  for (const key of toRemove) ls.removeItem(key)
+  const byNft = new Map<string, StoredSoul>()
+  for (const soul of [...parse(a), ...parse(b)]) {
+    const nft = soul?.data?.pfpId
+    if (!nft) continue
+    const existing = byNft.get(nft)
+    if (!existing || (soul.lastUpdated || "") > (existing.lastUpdated || "")) {
+      byNft.set(nft, soul)
+    }
+  }
+  return JSON.stringify([...byNft.values()])
+}
+
+/** Union-merge two persisted content values when both sides exist. */
+function mergeContentValues(key: string, live: string, parked: string): string | null {
+  if (key === "oni-souls") return mergeSoulArrays(live, parked)
+  if (key === DIRTY_KEY) {
+    try {
+      return JSON.stringify([...new Set([...JSON.parse(live), ...JSON.parse(parked)].map(String))])
+    } catch {
+      return live
+    }
+  }
+  if (key === TOMBSTONE_KEY) {
+    try {
+      const merged = { ...JSON.parse(parked), ...JSON.parse(live) }
+      return JSON.stringify(merged)
+    } catch {
+      return live
+    }
+  }
+  // Sync bookkeeping: the live session's value is authoritative; the parked
+  // copy is safe to drop (worst case: one redundant re-merge from the cloud).
+  if (key === SYNC_KEY || key === SYNC_STATUS_KEY) return live
+  // Opaque content blobs (chats, memories, archives...): no generic merge
+  // exists. Keep the live value and leave the parked copy parked — nothing is
+  // destroyed, and the parked copy stays recoverable.
+  return null
+}
+
+/**
+ * Move every live content key into `owner`'s parked namespace. Copy-then-delete
+ * per key, so a crash mid-transition can duplicate a key but never lose one.
+ * If a parked value already exists (crash leftovers, adopt collisions) it is
+ * merged where the shape is known, else superseded by the newer live value.
+ */
+function parkLocalContent(owner: string) {
+  if (typeof window === "undefined") return
+  const ls = window.localStorage
+  for (const key of listLiveContentKeys(ls)) {
+    const live = ls.getItem(key)
+    if (live === null) continue
+    const target = parkedKeyFor(owner, key)
+    const existing = ls.getItem(target)
+    const value = existing !== null ? (mergeContentValues(key, live, existing) ?? live) : live
+    try {
+      ls.setItem(target, value)
+      ls.removeItem(key)
+    } catch (e) {
+      // Quota: parking failed. Privacy beats recovery — the key must still not
+      // leak into the next account's session. This is the only deletion path
+      // left, and it's loud.
+      console.error(`Failed to park ${key} for ${owner}; removing without backup`, e)
+      ls.removeItem(key)
+    }
+  }
   if (flushTimer) {
     clearTimeout(flushTimer)
     flushTimer = null
@@ -125,13 +206,48 @@ function clearLocalContent() {
 }
 
 /**
+ * Move `owner`'s parked content back to the live keys. When a live key already
+ * exists (adopting an anon library while a parked library returns), souls and
+ * sync sets are merged; opaque blobs keep the live value and remain parked.
+ */
+function restoreParkedContent(owner: string) {
+  if (typeof window === "undefined") return
+  const ls = window.localStorage
+  const prefix = `${PARKED_PREFIX}:${owner}:`
+  const parkedKeys: string[] = []
+  for (let i = 0; i < ls.length; i++) {
+    const key = ls.key(i)
+    if (key && key.startsWith(prefix)) parkedKeys.push(key)
+  }
+  for (const parkedKey of parkedKeys) {
+    const liveKey = parkedKey.slice(prefix.length)
+    const parked = ls.getItem(parkedKey)
+    if (parked === null) continue
+    const live = ls.getItem(liveKey)
+    if (live === null) {
+      ls.setItem(liveKey, parked)
+      ls.removeItem(parkedKey)
+      continue
+    }
+    const merged = mergeContentValues(liveKey, live, parked)
+    if (merged !== null) {
+      ls.setItem(liveKey, merged)
+      ls.removeItem(parkedKey)
+    } else {
+      console.warn(`Keeping live ${liveKey}; parked copy for ${owner} preserved`)
+    }
+  }
+}
+
+/**
  * Decide whether the current local content may pass to `userId` (audit §8).
  * Decision table (prev = persisted owner):
  *   prev absent (anon/empty)  -> adopt: keep content, this user now owns it
- *                                (the intended first-login anon migration)
+ *                                (the intended first-login anon migration),
+ *                                then restore anything this user had parked
  *   prev === userId           -> no-op: same owner, e.g. TOKEN_REFRESHED
- *   prev = a DIFFERENT auth id -> wipe prev owner's content, THEN adopt
- *                                (shared-browser cross-user isolation)
+ *   prev = a DIFFERENT auth id -> park prev owner's content, restore userId's
+ *                                (shared-browser isolation without data loss)
  */
 function reconcileContentOwner(userId: string) {
   const prev = readContentOwner()
@@ -139,24 +255,26 @@ function reconcileContentOwner(userId: string) {
   if (prev !== null) {
     // A different authenticated user owned this browser's content. Their souls,
     // chats and dirty/tombstone queues must not merge into, upload to, or be
-    // visible under the new account. Wipe before mergeFromRemote pulls/uploads.
-    clearLocalContent()
+    // visible under the new account — park them before mergeFromRemote runs.
+    parkLocalContent(prev)
   }
+  restoreParkedContent(userId)
   writeContentOwner(userId)
 }
 
 /**
- * Deliberate sign-out: leave the browser a clean anonymous slate for whoever
- * uses it next. Clears the authenticated owner's content (their data is safe in
- * the cloud and re-merges on next login) and drops the owner marker. Anonymous
- * content (no owner recorded) is left untouched — logged-out souls belong to
- * the browser and must survive per the app's logged-out invariant.
+ * Deliberate sign-out: leave the browser an anonymous slate for whoever uses
+ * it next. The owner's content is parked (NOT deleted — chats and memories
+ * have no cloud copy) and returns on their next sign-in; the owner marker is
+ * dropped. Anonymous content (no owner recorded) is left untouched — logged-out
+ * souls belong to the browser and must survive per the app's logged-out
+ * invariant.
  */
 export function clearAuthenticatedContentOnSignOut() {
   const prev = readContentOwner()
   currentUserId = null
   if (prev !== null) {
-    clearLocalContent()
+    parkLocalContent(prev)
     clearContentOwner()
   }
   refreshBaseStatus()

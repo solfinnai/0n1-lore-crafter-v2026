@@ -26,6 +26,12 @@ interface WalletContextType {
   isInitializing: boolean
   connect: () => Promise<void>
   connectDemo: () => void
+  /**
+   * Adopt an address that was already authorized elsewhere (e.g. wallet
+   * sign-in just ran eth_requestAccounts) — sets connected state without
+   * prompting the wallet again.
+   */
+  adoptAddress: (address: string) => void
   disconnect: () => void
   error: string | null
 }
@@ -37,6 +43,7 @@ const WalletContext = createContext<WalletContextType>({
   isInitializing: true,
   connect: async () => {},
   connectDemo: () => {},
+  adoptAddress: () => {},
   disconnect: () => {},
   error: null,
 })
@@ -146,6 +153,14 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     console.log("Connected in demo mode:", DEMO_WALLET_ADDRESS)
   }
 
+  const adoptAddress = (adopted: string) => {
+    setError(null)
+    setAddress(adopted)
+    setIsConnected(true)
+    localStorage.setItem("walletAddress", adopted)
+    console.log("Wallet adopted from sign-in:", adopted)
+  }
+
   const disconnect = () => {
     console.log("Disconnecting wallet...")
     setAddress(null)
@@ -174,6 +189,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         isInitializing,
         connect,
         connectDemo,
+        adoptAddress,
         disconnect,
         error,
       }}

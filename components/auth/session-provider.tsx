@@ -8,11 +8,11 @@
  *   initial pull/merge. First login (empty remote) auto-uploads local souls
  *   (sample token / demo-wallet artifacts excluded by the storage layer)
  *   and shows a toast — no blocking prompts (handoff §6.6).
- * - On sign-out: wipes the signed-out user's authenticated souls/chats from
- *   this browser (they stay safe in the cloud account and return on next login)
- *   so a shared browser can't leak them to the next person; storage degrades to
- *   local-only. A different user signing in likewise clears the prior owner's
- *   data before merging (owner-tracking in lib/storage-hybrid).
+ * - On sign-out: PARKS the signed-out user's souls/chats under their namespace
+ *   (never deleted — chats/memories have no cloud copy) so a shared browser
+ *   can't leak them to the next person; they return on their next sign-in and
+ *   storage degrades to local-only. A different user signing in likewise parks
+ *   the prior owner's data before merging (owner-tracking in lib/storage-hybrid).
  * - Mirrors the connected wallet address into the storage layer so the
  *   demo/sample wallet can never sync (handoff §7.4).
  *
@@ -73,7 +73,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setUser(nextUser)
 
       if (!nextUser) {
-        // Deliberate sign-out (this tab or another) wipes the previous
+        // Deliberate sign-out (this tab or another) parks the previous
         // authenticated user's souls/chats so the next person on this shared
         // browser can't see or upload them. A passive no-session (cold load,
         // expired token) is conservative — keep local content for the returning
@@ -86,8 +86,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         mergedForUserRef.current = null
         return
       }
-      // reconcileContentOwner (inside setCurrentUserId) wipes any DIFFERENT
-      // authenticated user's residual content before the merge below runs.
+      // reconcileContentOwner (inside setCurrentUserId) parks any DIFFERENT
+      // authenticated user's residual content (and restores this user's own
+      // parked content) before the merge below runs.
       setCurrentUserId(nextUser.id)
       if (mergedForUserRef.current === nextUser.id) return
       mergedForUserRef.current = nextUser.id
@@ -138,10 +139,10 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       toast.error("Sign out failed", { description: error.message })
       return
     }
-    // onAuthStateChange also fires SIGNED_OUT, but clear eagerly for snappy UI.
-    // This wipes the signed-out user's authenticated souls/chats from this
-    // browser so the next person can't see or upload them (idempotent with the
-    // event-driven clear above).
+    // onAuthStateChange also fires SIGNED_OUT, but park eagerly for snappy UI.
+    // This parks the signed-out user's souls/chats out of the live keys so the
+    // next person can't see or upload them (idempotent with the event-driven
+    // park above; everything returns on their next sign-in).
     setUser(null)
     clearAuthenticatedContentOnSignOut()
     mergedForUserRef.current = null

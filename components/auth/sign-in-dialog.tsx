@@ -31,6 +31,7 @@ import {
   withWalletTimeout,
 } from "@/lib/wallet-request"
 import { useSupabaseSession } from "@/components/auth/session-provider"
+import { useWallet } from "@/components/wallet/wallet-provider"
 
 /** Best-effort human label for a Supabase user (email or linked wallet). */
 function describeUser(user: User): string {
@@ -45,8 +46,32 @@ function describeUser(user: User): string {
   return "Signed in"
 }
 
+/**
+ * Where a wallet lands if it signs in, per the server preflight. Fail-open to
+ * "unlinked" on any error: sign-in then behaves exactly as before the
+ * preflight existed, and duplicates are non-destructive (park/restore).
+ */
+async function preflightWalletStatus(address: string): Promise<"wallet_account" | "email_account" | "unlinked"> {
+  try {
+    const res = await fetch("/api/wallet-login/preflight", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ address }),
+      signal: AbortSignal.timeout(10_000),
+    })
+    if (!res.ok) return "unlinked"
+    const body = await res.json()
+    return body?.status === "email_account" || body?.status === "wallet_account"
+      ? body.status
+      : "unlinked"
+  } catch {
+    return "unlinked"
+  }
+}
+
 export function SignInButton() {
   const { user, isEnabled, signOut } = useSupabaseSession()
+  const { adoptAddress } = useWallet()
   const [open, setOpen] = useState(false)
   const [view, setView] = useState<"methods" | "code">("methods")
   const [email, setEmail] = useState("")
@@ -137,7 +162,25 @@ export function SignInButton() {
       // Request account access ourselves first: it carries the deadline, and
       // auth-js's internal eth_requestAccounts (which would otherwise swallow
       // the real error) then resolves instantly from the granted permission.
-      await requestAccounts(provider)
+      const accounts = await requestAccounts(provider)
+      const address = accounts?.[0]
+      if (!address) throw new Error("No wallet account selected")
+
+      // Preflight BEFORE any signature: a wallet that's linked to an email
+      // account can't be reached by wallet login (no web3 linkIdentity yet) —
+      // signing in would mint a duplicate empty account. Detour instead.
+      const status = await preflightWalletStatus(address)
+      if (attempt !== walletAttemptRef.current) return
+      if (status === "email_account") {
+        adoptAddress(address) // connected for browsing; just not the login key
+        toast.info("This wallet is linked to an email account", {
+          description:
+            "Enter your email below to sign in — your souls live there, and the wallet stays linked as proof of ownership.",
+          duration: 8000,
+        })
+        return
+      }
+
       const { error } = await withWalletTimeout(
         supabase.auth.signInWithWeb3({
           chain: "ethereum",
@@ -150,6 +193,19 @@ export function SignInButton() {
       )
       if (error) throw error
       if (attempt !== walletAttemptRef.current) return
+
+      // The header connect state adopts the just-authorized wallet — one
+      // MetaMask prompt covers both signing in and browsing your NFTs.
+      adoptAddress(address)
+
+      // Session-as-proof self-link: make this wallet-born account discoverable
+      // by future preflights. Advisory — never fail the sign-in over it.
+      fetch("/api/wallet-link/self", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+        signal: AbortSignal.timeout(15_000),
+      }).catch((e) => console.warn("wallet self-link skipped:", e))
+
       closeDialog()
       toast.success("Signed in with wallet")
     } catch (e) {
@@ -240,6 +296,8 @@ export function SignInButton() {
         return
       }
 
+      // The wallet just authorized this site — surface it in the header too.
+      adoptAddress(address)
       toast.success(`Wallet ${shortenAddress(verify.address || challenge.address)} linked`, {
         description: "This wallet is now proof of ownership for your account.",
       })

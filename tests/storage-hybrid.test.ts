@@ -839,6 +839,84 @@ describe("content-owner isolation (audit §8/§11: shared-browser cross-user lea
     expect(contentOwner()).toBe(USER_ID)
   })
 
+  it("switching A -> B -> A restores A's souls, chats and dirty set intact (park/restore, no data loss)", async () => {
+    hybrid.setCurrentWalletAddress(REAL_WALLET)
+    hybrid.setCurrentUserId(USER_A)
+    // Unsynced content of every stripe: a dirty soul + local-only chat blob.
+    fake.state.upsertError = { message: "offline" }
+    hybrid.storeSoul(makeCharacter("2000", "A's Unsynced Soul"))
+    await hybrid.flushDirty()
+    expect(dirtySet()).toContain("2000")
+    storage.setItem("ai_agent_memories", '{"a":"memories"}')
+    storage.setItem("chat-settings-2000", '{"tone":"noir"}')
+
+    // B signs in: A's content vanishes from view but is parked, not deleted.
+    fake.state.rows = []
+    hybrid.setCurrentUserId(USER_B)
+    expect(hybrid.getSoulByNftId("2000")).toBeNull()
+    expect(storage.getItem("ai_agent_memories")).toBeNull()
+    expect(storage.getItem(`oni-parked:${USER_A}:ai_agent_memories`)).toBe('{"a":"memories"}')
+
+    // A returns: everything is back, including the dirty queue.
+    hybrid.setCurrentUserId(USER_A)
+    expect(hybrid.getSoulByNftId("2000")?.data.soulName).toBe("A's Unsynced Soul")
+    expect(dirtySet()).toContain("2000")
+    expect(storage.getItem("ai_agent_memories")).toBe('{"a":"memories"}')
+    expect(storage.getItem("chat-settings-2000")).toBe('{"tone":"noir"}')
+    expect(storage.getItem(`oni-parked:${USER_A}:ai_agent_memories`)).toBeNull()
+    expect(contentOwner()).toBe(USER_A)
+
+    // The parked dirty soul flushes once the network returns.
+    fake.state.upsertError = null
+    await hybrid.flushDirty()
+    expect(dirtySet()).toHaveLength(0)
+    expect(fake.upsertCalls.some((c) => c.values.nft_id === "2000" && c.values.user_id === USER_A)).toBe(true)
+  })
+
+  it("sign-out parks content and the same user's next sign-in restores it (chats survive the round trip)", async () => {
+    hybrid.setCurrentWalletAddress(REAL_WALLET)
+    hybrid.setCurrentUserId(USER_ID)
+    hybrid.storeSoul(makeCharacter("2100", "Parked Soul"))
+    storage.setItem("oni-chat-archives", '[{"chat":"history"}]')
+    await hybrid.flushDirty()
+
+    hybrid.clearAuthenticatedContentOnSignOut()
+    // Invisible to the next person...
+    expect(hybrid.getSoulByNftId("2100")).toBeNull()
+    expect(storage.getItem("oni-chat-archives")).toBeNull()
+    expect(contentOwner()).toBeNull()
+    // ...but parked, not destroyed.
+    expect(storage.getItem(`oni-parked:${USER_ID}:oni-chat-archives`)).toBe('[{"chat":"history"}]')
+
+    fake.state.rows = []
+    hybrid.setCurrentUserId(USER_ID)
+    expect(hybrid.getSoulByNftId("2100")?.data.soulName).toBe("Parked Soul")
+    expect(storage.getItem("oni-chat-archives")).toBe('[{"chat":"history"}]')
+  })
+
+  it("adopting an anon library while a parked library returns merges souls by nft_id (newest wins)", async () => {
+    hybrid.setCurrentWalletAddress(REAL_WALLET)
+    // Session 1: user creates a soul, signs out (content parked).
+    hybrid.setCurrentUserId(USER_ID)
+    plantSoul({ id: "p-1", createdAt: T_OLD, lastUpdated: T_OLD, data: makeCharacter("2200", "Parked Version") })
+    plantSoul({ id: "p-2", createdAt: T_OLD, lastUpdated: T_OLD, data: makeCharacter("2201", "Only Parked") })
+    hybrid.clearAuthenticatedContentOnSignOut()
+
+    // Session 2 (logged out): anon creates a NEWER soul for the same NFT plus a new one.
+    plantSoul({ id: "a-1", createdAt: T_NEW, lastUpdated: T_NEW, data: makeCharacter("2200", "Anon Newer") })
+    plantSoul({ id: "a-2", createdAt: T_NEW, lastUpdated: T_NEW, data: makeCharacter("2202", "Only Anon") })
+
+    // Same user signs back in: adopt the anon library AND restore the parked one.
+    fake.state.rows = []
+    hybrid.setCurrentUserId(USER_ID)
+
+    const byNft = (nft: string) => hybrid.getSoulByNftId(nft)
+    expect(byNft("2200")?.data.soulName).toBe("Anon Newer") // newest wins the collision
+    expect(byNft("2201")?.data.soulName).toBe("Only Parked") // restored
+    expect(byNft("2202")?.data.soulName).toBe("Only Anon") // adopted
+    expect(storedSouls()).toHaveLength(3)
+  })
+
   it("sample and demo souls present at sign-in are never uploaded to the account", async () => {
     hybrid.setCurrentWalletAddress(REAL_WALLET)
     plantSoul({ id: "s", createdAt: T_OLD, lastUpdated: T_OLD, data: makeCharacter(SAMPLE_TOKEN_ID, "Sample") })
