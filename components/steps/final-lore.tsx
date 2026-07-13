@@ -18,6 +18,7 @@ import { storeSoul, initializeHybridStorage, setCurrentWalletAddress } from "@/l
 import { toast } from "sonner"
 import { useWallet } from "@/components/wallet/wallet-provider"
 import { isDemoWallet } from "@/lib/dev-mode"
+import { CanonExportDialog } from "@/components/canon-export-dialog"
 
 interface FinalLoreProps {
   characterData: CharacterData
@@ -29,6 +30,7 @@ export function FinalLore({ characterData, updateCharacterData, prevStep }: Fina
   const [soulName, setSoulName] = useState(characterData.soulName || "")
   const [isSaving, setIsSaving] = useState(false)
   const [isSaved, setIsSaved] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
   const router = useRouter()
   const { address } = useWallet()
   const CONTRACT_ADDRESS = "0x3bf2922f4520a8ba0c2efc3d2a1539678dad5e9d" // 0N1 Force contract address
@@ -49,18 +51,6 @@ export function FinalLore({ characterData, updateCharacterData, prevStep }: Fina
   const handleSelectSuggestion = (suggestion: string) => {
     setSoulName(suggestion)
     updateCharacterData({ soulName: suggestion })
-  }
-
-  const exportAsJson = () => {
-    const dataStr = JSON.stringify(characterData, null, 2)
-    const dataUri = `data:application/json;charset=utf-8,${encodeURIComponent(dataStr)}`
-
-    const exportFileDefaultName = `0N1_${characterData.pfpId}_lore.json`
-
-    const linkElement = document.createElement("a")
-    linkElement.setAttribute("href", dataUri)
-    linkElement.setAttribute("download", exportFileDefaultName)
-    linkElement.click()
   }
 
   const saveSoul = () => {
@@ -405,7 +395,7 @@ export function FinalLore({ characterData, updateCharacterData, prevStep }: Fina
             </Button>
 
             <Button
-              onClick={exportAsJson}
+              onClick={() => setExportOpen(true)}
               disabled={!soulName.trim()}
               variant="outline"
               className="border-purple-500/30 hover:bg-purple-900/20"
@@ -423,6 +413,12 @@ export function FinalLore({ characterData, updateCharacterData, prevStep }: Fina
           )}
         </div>
       </div>
+
+      <CanonExportDialog
+        open={exportOpen}
+        onOpenChange={setExportOpen}
+        characterData={{ ...characterData, soulName }}
+      />
     </div>
   )
 }
