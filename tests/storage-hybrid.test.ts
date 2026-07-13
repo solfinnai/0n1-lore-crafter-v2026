@@ -358,6 +358,71 @@ describe("dirty-set persistence ('oni-souls-dirty')", () => {
 })
 
 // ---------------------------------------------------------------------------
+// 3b. sync robustness: terminal status, retry, honest manualSync
+// ---------------------------------------------------------------------------
+
+describe("sync robustness (stuck badge / retry / false success)", () => {
+  it("doFlush always lands on a terminal status — a failed upsert leaves 'error', not 'syncing'", async () => {
+    enableCloud()
+    fake.state.upsertError = { message: "boom" }
+    hybrid.storeSoul(makeCharacter("3000", "Will Fail"))
+
+    await hybrid.flushDirty()
+
+    // Never stuck on "syncing"; the retry UI is reachable.
+    expect(hybrid.getSyncStatus()).toBe("error")
+    expect(dirtySet()).toContain("3000")
+  })
+
+  it("manualSync reports FAILURE when the remote pull errors even if nothing is dirty", async () => {
+    enableCloud()
+    fake.state.selectError = { message: "pull failed" }
+
+    const result = await hybrid.manualSync()
+
+    // The pull error is swallowed by supabase-js into { error }; manualSync
+    // must still not claim success just because the dirty set is empty.
+    expect(result.success).toBe(false)
+    expect(result.errors.length).toBeGreaterThan(0)
+    expect(hybrid.getSyncStatus()).toBe("error")
+  })
+
+  it("manualSync reports FAILURE when an upload can't reach the cloud", async () => {
+    enableCloud()
+    fake.state.upsertError = { message: "offline" }
+    hybrid.storeSoul(makeCharacter("3001", "Stuck Upload"))
+
+    const result = await hybrid.manualSync()
+
+    expect(result.success).toBe(false)
+    expect(result.errors[0]).toMatch(/couldn't sync/i)
+  })
+
+  it("manualSync reports success once the cloud is reachable and the dirty set clears", async () => {
+    enableCloud()
+    hybrid.storeSoul(makeCharacter("3002", "Clean Sync"))
+
+    const result = await hybrid.manualSync()
+
+    expect(result.success).toBe(true)
+    expect(result.errors).toHaveLength(0)
+  })
+
+  it("mergeFromRemote surfaces failure via summary.ok so the caller can retry", async () => {
+    enableCloud()
+    fake.state.selectError = { message: "network down" }
+
+    const failed = await hybrid.mergeFromRemote()
+    expect(failed.ok).toBe(false)
+
+    // Recover: the pull works now and the same call reports ok.
+    fake.state.selectError = null
+    const recovered = await hybrid.mergeFromRemote()
+    expect(recovered.ok).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // 4. LWW merge by nft_id
 // ---------------------------------------------------------------------------
 

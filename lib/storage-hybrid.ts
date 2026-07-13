@@ -65,6 +65,36 @@ let flushTimer: ReturnType<typeof setTimeout> | null = null
 
 export type SyncStatus = "idle" | "syncing" | "error" | "offline" | "local-only"
 
+// supabase-js issues no request timeout, so a stalled connection (dropped
+// network, unreachable project) leaves an await pending forever — which used to
+// wedge doFlush on "syncing" and flushInFlight non-null permanently. Race every
+// soul network call against this deadline so the sync engine can always recover.
+const NETWORK_TIMEOUT_MS = 15_000
+
+class SyncTimeoutError extends Error {
+  constructor() {
+    super("Supabase request timed out")
+    this.name = "SyncTimeoutError"
+  }
+}
+
+/** Reject a thenable that outlives the deadline (the underlying op is abandoned). */
+function withNetworkTimeout<T>(op: PromiseLike<T>, ms = NETWORK_TIMEOUT_MS): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new SyncTimeoutError()), ms)
+    Promise.resolve(op).then(
+      (v) => {
+        clearTimeout(timer)
+        resolve(v)
+      },
+      (e) => {
+        clearTimeout(timer)
+        reject(e)
+      },
+    )
+  })
+}
+
 let syncStatus: SyncStatus = "local-only"
 const statusListeners = new Set<(status: SyncStatus) => void>()
 
@@ -398,47 +428,59 @@ async function upsertSoul(soul: StoredSoul): Promise<boolean> {
   if (shouldSkipSoul(soul)) return true
 
   const nftId = String(soul.data.pfpId)
-  const { error } = await supabase.from("souls").upsert(
-    {
-      user_id: currentUserId,
-      nft_id: nftId,
-      local_id: soul.id,
-      data: soul.data,
-      created_at: soul.createdAt,
-      updated_at: soul.lastUpdated,
-      deleted_at: null,
-    },
-    { onConflict: "user_id,nft_id" },
-  )
-
-  if (error) {
-    console.error("souls upsert failed", error)
+  try {
+    const { error } = await withNetworkTimeout(
+      supabase.from("souls").upsert(
+        {
+          user_id: currentUserId,
+          nft_id: nftId,
+          local_id: soul.id,
+          data: soul.data,
+          created_at: soul.createdAt,
+          updated_at: soul.lastUpdated,
+          deleted_at: null,
+        },
+        { onConflict: "user_id,nft_id" },
+      ),
+    )
+    if (error) {
+      console.error("souls upsert failed", error)
+      setStatus("error")
+      return false
+    }
+    return true
+  } catch (e) {
+    console.error("souls upsert timed out or threw", e)
     setStatus("error")
     return false
   }
-  return true
 }
 
 async function tombstoneRemote(nftId: string, deletedAt: string): Promise<boolean> {
   if (!cloudEnabled() || !supabase || !currentUserId) return false
-  const { error } = await supabase
-    .from("souls")
-    .upsert(
-      {
-        user_id: currentUserId,
-        nft_id: nftId,
-        local_id: `tombstone-${nftId}`,
-        data: {},
-        updated_at: deletedAt,
-        deleted_at: deletedAt,
-      },
-      { onConflict: "user_id,nft_id" },
+  try {
+    const { error } = await withNetworkTimeout(
+      supabase.from("souls").upsert(
+        {
+          user_id: currentUserId,
+          nft_id: nftId,
+          local_id: `tombstone-${nftId}`,
+          data: {},
+          updated_at: deletedAt,
+          deleted_at: deletedAt,
+        },
+        { onConflict: "user_id,nft_id" },
+      ),
     )
-  if (error) {
-    console.error("tombstone failed", error)
+    if (error) {
+      console.error("tombstone failed", error)
+      return false
+    }
+    return true
+  } catch (e) {
+    console.error("tombstone timed out or threw", e)
     return false
   }
-  return true
 }
 
 let flushInFlight: Promise<void> | null = null
@@ -460,52 +502,69 @@ async function doFlush(): Promise<void> {
     return
   }
   setStatus("syncing")
-  const dirty = readDirty()
-  const tombs = readTombstones()
-  const flushed: string[] = []
-  let tombstoneFailures = 0
+  // try/finally guarantees a TERMINAL status: without it, an unexpected throw
+  // (or a hung call before timeouts were added) would strand the UI on
+  // "syncing" forever with the retry button disabled. On any escape, fall back
+  // to "error" — dirty work remains, and the user can retry.
+  let reachedTerminal = false
+  try {
+    const dirty = readDirty()
+    const tombs = readTombstones()
+    const flushed: string[] = []
+    let tombstoneFailures = 0
 
-  for (const nftId of Object.keys(tombs)) {
-    if (await tombstoneRemote(nftId, tombs[nftId])) {
-      // Pushed: drop the map entry so it isn't re-sent on every flush forever.
-      // A later pull re-adopts it from the remote row while it still matters.
-      // Guarded re-read: a delete recorded mid-flight (newer timestamp) stays.
-      const current = readTombstones()
-      if (current[nftId] === tombs[nftId]) {
-        delete current[nftId]
-        writeTombstones(current)
+    for (const nftId of Object.keys(tombs)) {
+      if (await tombstoneRemote(nftId, tombs[nftId])) {
+        // Pushed: drop the map entry so it isn't re-sent on every flush forever.
+        // A later pull re-adopts it from the remote row while it still matters.
+        // Guarded re-read: a delete recorded mid-flight (newer timestamp) stays.
+        const current = readTombstones()
+        if (current[nftId] === tombs[nftId]) {
+          delete current[nftId]
+          writeTombstones(current)
+        }
+      } else {
+        tombstoneFailures++
       }
-    } else {
-      tombstoneFailures++
     }
-  }
 
-  for (const nftId of dirty) {
-    if (tombs[nftId]) {
-      flushed.push(nftId)
-      continue
+    for (const nftId of dirty) {
+      if (tombs[nftId]) {
+        flushed.push(nftId)
+        continue
+      }
+      const soul = local.getSoulByNftId(nftId)
+      if (!soul || shouldSkipSoul(soul)) {
+        flushed.push(nftId)
+        continue
+      }
+      if (await upsertSoul(soul)) flushed.push(nftId)
     }
-    const soul = local.getSoulByNftId(nftId)
-    if (!soul || shouldSkipSoul(soul)) {
-      flushed.push(nftId)
-      continue
-    }
-    if (await upsertSoul(soul)) flushed.push(nftId)
-  }
 
-  // Re-read at write-back and only remove what THIS run flushed — flags added
-  // while the network calls were in flight must survive.
-  const remaining = readDirty()
-  for (const nftId of flushed) remaining.delete(nftId)
-  writeDirty(remaining)
-  if (typeof window !== "undefined") {
-    window.localStorage.setItem(SYNC_KEY, String(Date.now()))
+    // Re-read at write-back and only remove what THIS run flushed — flags added
+    // while the network calls were in flight must survive.
+    const remaining = readDirty()
+    for (const nftId of flushed) remaining.delete(nftId)
+    writeDirty(remaining)
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(SYNC_KEY, String(Date.now()))
+    }
+    // A failed tombstone push is unsynced work too — never show "Synced" for it.
+    setStatus(remaining.size === 0 && tombstoneFailures === 0 ? "idle" : "error")
+    reachedTerminal = true
+  } finally {
+    if (!reachedTerminal) setStatus("error")
   }
-  // A failed tombstone push is unsynced work too — never show "Synced" for it.
-  setStatus(remaining.size === 0 && tombstoneFailures === 0 ? "idle" : "error")
 }
 
 export interface MergeSummary {
+  /**
+   * True only when the whole merge succeeded: the remote pull returned without
+   * error AND the follow-up flush left no unsynced work. Callers must gate any
+   * "synced" messaging on this — a swallowed pull error or a failed upload
+   * otherwise reads as success. False when cloud is disabled (nothing synced).
+   */
+  ok: boolean
   /** True when the remote had no rows for this user (first login). */
   firstLogin: boolean
   /** Local souls queued for upload because the remote didn't have them. */
@@ -519,16 +578,22 @@ export interface MergeSummary {
  * Tombstones beat live rows both directions.
  */
 export async function mergeFromRemote(): Promise<MergeSummary> {
-  const summary: MergeSummary = { firstLogin: false, queued: 0, uploaded: 0 }
+  const summary: MergeSummary = { ok: false, firstLogin: false, queued: 0, uploaded: 0 }
   if (!cloudEnabled() || !supabase || !currentUserId) return summary
 
-  const { data, error } = await supabase
-    .from("souls")
-    .select("*")
-    .eq("user_id", currentUserId)
-
-  if (error) {
-    console.error("pull souls failed", error)
+  let data: any[] | null
+  try {
+    const res = await withNetworkTimeout(
+      supabase.from("souls").select("*").eq("user_id", currentUserId),
+    )
+    if (res.error) {
+      console.error("pull souls failed", res.error)
+      setStatus("error")
+      return summary
+    }
+    data = res.data
+  } catch (e) {
+    console.error("pull souls timed out or threw", e)
     setStatus("error")
     return summary
   }
@@ -619,6 +684,10 @@ export async function mergeFromRemote(): Promise<MergeSummary> {
   // Report what actually landed: anything still dirty after the flush failed.
   const stillDirty = readDirty()
   summary.uploaded = queuedIds.filter((id) => !stillDirty.has(id)).length
+  // The pull succeeded (we got here) and the merge is "ok" only if the flush
+  // left nothing unsynced and the engine isn't sitting in an error state (a
+  // failed tombstone push sets "error" without leaving a dirty soul).
+  summary.ok = stillDirty.size === 0 && syncStatus !== "error"
   return summary
 }
 
@@ -709,9 +778,23 @@ export async function manualSync(): Promise<{
     }
   }
   try {
-    await mergeFromRemote()
-    const dirty = readDirty()
-    return { success: dirty.size === 0, synced: dirty.size === 0 ? 1 : 0, errors: dirty.size ? ["Some souls still dirty"] : [] }
+    const summary = await mergeFromRemote()
+    // Gate success on the merge's own verdict: a swallowed pull error (the
+    // select returns { error } rather than throwing) or a failed upload both
+    // leave summary.ok false, so we never toast "Souls synced" over a failure.
+    if (!summary.ok) {
+      const stillDirty = readDirty().size
+      return {
+        success: false,
+        synced: 0,
+        errors: [
+          stillDirty > 0
+            ? `${stillDirty} soul${stillDirty === 1 ? "" : "s"} couldn't sync — check your connection and retry.`
+            : "Couldn't reach the cloud — check your connection and retry.",
+        ],
+      }
+    }
+    return { success: true, synced: 1, errors: [] }
   } catch (e) {
     return { success: false, synced: 0, errors: [`Sync failed: ${e}`] }
   }

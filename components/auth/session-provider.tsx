@@ -54,8 +54,13 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const { address } = useWallet()
-  // Guards the initial merge so TOKEN_REFRESHED / repeat events don't re-run it.
+  // Set to a user id only after that user's initial merge SUCCEEDS, so repeat
+  // events (TOKEN_REFRESHED, re-emitted SIGNED_IN) don't re-run a good merge —
+  // but a FAILED merge leaves this null so the next event retries it.
   const mergedForUserRef = useRef<string | null>(null)
+  // Prevents two concurrent initial merges for the same user (the success
+  // latch above can't, since it isn't set until the first one resolves).
+  const mergeInFlightRef = useRef<string | null>(null)
 
   // Keep the storage layer's wallet gate in sync with the connected wallet
   // (the demo/sample wallet disables cloud sync inside storage-hybrid).
@@ -84,17 +89,25 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           setCurrentUserId(null)
         }
         mergedForUserRef.current = null
+        mergeInFlightRef.current = null
         return
       }
       // reconcileContentOwner (inside setCurrentUserId) parks any DIFFERENT
       // authenticated user's residual content (and restores this user's own
       // parked content) before the merge below runs.
       setCurrentUserId(nextUser.id)
+      // Skip only if this user already merged successfully or is merging now —
+      // a prior FAILED merge left both refs clear, so this retries it.
       if (mergedForUserRef.current === nextUser.id) return
-      mergedForUserRef.current = nextUser.id
+      if (mergeInFlightRef.current === nextUser.id) return
+      mergeInFlightRef.current = nextUser.id
 
       mergeFromRemote()
         .then((summary) => {
+          // Latch as done only on a fully successful merge; on failure leave it
+          // null so the next auth event (or a manual sync) tries again.
+          if (summary.ok) mergedForUserRef.current = nextUser.id
+
           if (summary.firstLogin && summary.uploaded > 0) {
             toast.success(
               `Synced ${summary.uploaded} soul${summary.uploaded === 1 ? "" : "s"} to your account`,
@@ -111,6 +124,9 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
         })
         .catch((e) => {
           console.error("Initial soul sync failed", e)
+        })
+        .finally(() => {
+          if (mergeInFlightRef.current === nextUser.id) mergeInFlightRef.current = null
         })
     }
 
@@ -146,6 +162,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
     setUser(null)
     clearAuthenticatedContentOnSignOut()
     mergedForUserRef.current = null
+    mergeInFlightRef.current = null
     toast.success("Signed out", {
       description: "Your souls are safe in your account and return when you sign back in.",
     })
