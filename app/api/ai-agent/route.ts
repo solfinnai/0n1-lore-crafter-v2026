@@ -5,9 +5,13 @@ import {
   checkAndRecordDailyUsage,
   getDailyUsage,
   DAILY_LIMITS,
-  createDailyLimitResponse
+  createDailyLimitResponse,
+  resolveUsageKey,
+  estimateTokensFromText,
+  MAX_AI_REQUEST_CHARS,
 } from '@/lib/rate-limit'
 import { claudeComplete, isClaudeConfigured } from '@/lib/ai/claude'
+import { getRequestUser } from '@/lib/supabase-server'
 
 // Update the POST function to handle enhanced context
 
@@ -30,16 +34,24 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // This route is an unmetered Claude Opus proxy with NO client callers in the
+    // app (character chat/creation go through /api/ai-chat and /api/ai-assistant).
+    // Nothing legitimate hits it anonymously, so require a valid Supabase session
+    // and reject everything else. Combined with the per-request clamp and input
+    // bounds below, this closes the open-proxy hole.
+    const auth = await getRequestUser(request)
+    if (!auth) {
+      return NextResponse.json({ error: "Authentication required" }, { status: 401 })
+    }
+
     const {
       messages,
       systemPrompt,
       model = "claude-opus-4-8",
-      temperature = 0.8,
       maxTokens = 1000,
       memoryContext = null,
       enhancedPersonality = false,
       responseStyle = "dialogue",
-      walletAddress = null, // Optional wallet address for daily limits
     } = await request.json()
 
     // Debug logging
@@ -49,35 +61,36 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Messages array is required" }, { status: 400 })
     }
 
+    // Bound the conversation: cap count and validate each entry's shape so a
+    // caller can't smuggle huge or malformed payloads onto a paid Opus call.
+    if (messages.length > 50) {
+      return NextResponse.json({ error: "Too many messages (max 50)" }, { status: 400 })
+    }
+    for (const msg of messages) {
+      if (!msg || (msg.role !== "user" && msg.role !== "assistant") || typeof msg.content !== "string") {
+        return NextResponse.json(
+          { error: "Each message must have role 'user' or 'assistant' and string content" },
+          { status: 400 },
+        )
+      }
+    }
+
     if (!systemPrompt && !memoryContext) {
       return NextResponse.json({ error: "System prompt or memory context is required" }, { status: 400 })
     }
 
-    // Check daily usage limits per wallet if wallet address is provided
-    if (walletAddress) {
-      // Estimate token count for agent response (typically longer than assistant)
-      const messageTokens = messages.reduce((acc: number, msg: any) => acc + Math.ceil(msg.content.length / 4), 0)
-      const estimatedTokens = messageTokens + Math.ceil(maxTokens / 2) // Input + estimated response
-      
-      const dailyUsageResult = checkAndRecordDailyUsage(walletAddress, 'ai_messages', estimatedTokens)
-      if (!dailyUsageResult.allowed) {
-        return NextResponse.json(
-          createDailyLimitResponse(dailyUsageResult.remaining, dailyUsageResult.resetTime, "AI agent"),
-          { 
-            status: 429,
-            headers: {
-              'X-Daily-Limit-AI-Messages': String(DAILY_LIMITS.ai_messages),
-              'X-Daily-Limit-Summaries': String(DAILY_LIMITS.summaries),
-              'X-Daily-Limit-Tokens': String(DAILY_LIMITS.total_tokens),
-              'X-Daily-Remaining-AI-Messages': dailyUsageResult.remaining.aiMessages.toString(),
-              'X-Daily-Remaining-Summaries': dailyUsageResult.remaining.summaries.toString(),
-              'X-Daily-Remaining-Tokens': dailyUsageResult.remaining.totalTokens.toString(),
-              'X-Daily-Reset': new Date(dailyUsageResult.resetTime).toISOString()
-            }
-          }
-        )
-      }
+    // Reject oversized request bodies before doing any paid work.
+    const combinedInputChars =
+      (typeof systemPrompt === "string" ? systemPrompt.length : 0) +
+      (typeof memoryContext === "string" ? memoryContext.length : 0) +
+      JSON.stringify(messages).length
+    if (combinedInputChars > MAX_AI_REQUEST_CHARS) {
+      return NextResponse.json({ error: "Request too large" }, { status: 400 })
     }
+
+    // Clamp the caller-supplied token budget: never let an attacker's value flow
+    // straight into max_tokens on Opus 4.8.
+    const cappedMax = Math.min(Math.max(1, Number(maxTokens) || 1000), 2000)
 
     // All models are served by Claude now
     if (!isClaudeConfigured()) {
@@ -136,17 +149,43 @@ Create a rich, immersive scene with detailed descriptions:
         content: msg.content,
       }))
 
+    // Meter the daily cap AFTER assembling the prompt, charging tokens estimated
+    // from the ACTUAL assembled text plus an allowance for the (clamped) reply.
+    // Identity is the authenticated user's id (auth is guaranteed above).
+    const usageKey = resolveUsageKey(request, auth.user.id, null)
+    const estimatedTokens =
+      estimateTokensFromText(finalSystemPrompt, ...formattedMessages.map((m) => m.content)) +
+      Math.ceil(cappedMax / 2)
+    const dailyUsageResult = checkAndRecordDailyUsage(usageKey, 'ai_messages', estimatedTokens)
+    if (!dailyUsageResult.allowed) {
+      return NextResponse.json(
+        createDailyLimitResponse(dailyUsageResult.remaining, dailyUsageResult.resetTime, "AI agent"),
+        {
+          status: 429,
+          headers: {
+            'X-Daily-Limit-AI-Messages': String(DAILY_LIMITS.ai_messages),
+            'X-Daily-Limit-Summaries': String(DAILY_LIMITS.summaries),
+            'X-Daily-Limit-Tokens': String(DAILY_LIMITS.total_tokens),
+            'X-Daily-Remaining-AI-Messages': dailyUsageResult.remaining.aiMessages.toString(),
+            'X-Daily-Remaining-Summaries': dailyUsageResult.remaining.summaries.toString(),
+            'X-Daily-Remaining-Tokens': dailyUsageResult.remaining.totalTokens.toString(),
+            'X-Daily-Reset': new Date(dailyUsageResult.resetTime).toISOString()
+          }
+        }
+      )
+    }
+
     const responseText = await claudeComplete({
       system: finalSystemPrompt,
       messages: formattedMessages,
-      maxTokens,
+      maxTokens: cappedMax,
     })
 
     // Return successful response with usage information
     const responseHeaders: Record<string, string> = {}
-    if (walletAddress) {
+    if (usageKey) {
       // Get updated usage info after processing (don't increment again, just get current state)
-      const currentUsage = getDailyUsage(walletAddress)
+      const currentUsage = getDailyUsage(usageKey)
       if (currentUsage.allowed) {
         responseHeaders['X-Daily-Remaining-AI-Messages'] = currentUsage.remaining.aiMessages.toString()
         responseHeaders['X-Daily-Remaining-Summaries'] = currentUsage.remaining.summaries.toString()

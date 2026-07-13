@@ -1,13 +1,25 @@
 import { NextRequest, NextResponse } from "next/server"
+import { getAddress } from 'ethers'
 import { checkOpenSeaRateLimitEnhanced, createRateLimitResponse } from '@/lib/rate-limit'
 import { COLLECTIONS, CollectionKey, getAllCollectionKeys } from '@/lib/collection-config'
 import { UnifiedCharacter, UnifiedCharacterResponse } from '@/lib/types'
-import { withOptionalAuth, getRequestWalletAddress } from '@/lib/auth-middleware'
+import { getRequestUser } from '@/lib/supabase-server'
 import { isDevMode } from '@/lib/auth'
 import { isDemoWallet, isSampleModeEnabled, DEMO_TOKEN_IDS } from '@/lib/dev-mode'
 import { SAMPLE_TOKEN_ID, SAMPLE_TOKEN_IMAGE } from '@/lib/sample-token'
 
 const OPENSEA_API_KEY = process.env.OPENSEA_API_KEY
+
+// Bound the unauthenticated external-fetch amplification: cap the paginated
+// OpenSea account walk, and cap how many per-token Frame lookups we fan out.
+const MAX_PAGES = 5
+const MAX_FRAME_LOOKUPS = 60
+
+// A numeric token id (as returned by OpenSea `identifier`). Guards the value
+// before it is interpolated into an outbound OpenSea URL path.
+function isNumericTokenId(value: unknown): value is string {
+  return typeof value === "string" && /^\d+$/.test(value)
+}
 
 // Demo/sample mode: build a set of characters without requiring real ownership.
 // The pinned sample token uses its committed local image; other demo tokens try
@@ -22,7 +34,7 @@ async function buildDemoCharacters(tokenIds: string[], label: string): Promise<U
     } else {
       try {
         const response = await fetch(
-          `https://api.opensea.io/api/v2/chain/ethereum/contract/${forceContract}/nfts/${tokenId}`,
+          `https://api.opensea.io/api/v2/chain/ethereum/contract/${encodeURIComponent(forceContract)}/nfts/${encodeURIComponent(tokenId)}`,
           {
             headers: { 'X-API-KEY': OPENSEA_API_KEY || '', 'Accept': 'application/json' },
             next: { revalidate: 86400 },
@@ -60,10 +72,10 @@ async function fetchCollectionNfts(address: string, collection: CollectionKey): 
   const nfts: any[] = []
   let next: string | null = null
 
-  for (let page = 0; page < 10; page++) {
+  for (let page = 0; page < MAX_PAGES; page++) {
     const url =
-      `https://api.opensea.io/v2/chain/ethereum/account/${address}/nfts` +
-      `?collection=${config.openSeaSlug}&limit=50${next ? `&next=${encodeURIComponent(next)}` : ""}`
+      `https://api.opensea.io/v2/chain/ethereum/account/${encodeURIComponent(address)}/nfts` +
+      `?collection=${encodeURIComponent(config.openSeaSlug)}&limit=50${next ? `&next=${encodeURIComponent(next)}` : ""}`
 
     console.log(`Fetching ${config.displayName} NFTs (page ${page + 1})`)
 
@@ -93,8 +105,14 @@ async function fetchCollectionNfts(address: string, collection: CollectionKey): 
 
 // New function to fetch Frame NFT by specific token ID
 async function fetchFrameNftByTokenId(tokenId: string): Promise<any | null> {
+  // `tokenId` originates from OpenSea's `identifier`, but validate defensively
+  // before interpolating it into an outbound URL path.
+  if (!isNumericTokenId(tokenId)) {
+    console.log(`❌ Skipping Frame lookup for non-numeric token id: ${tokenId}`)
+    return null
+  }
   const frameContract = COLLECTIONS['frame' as CollectionKey].contractAddress
-  const url = `https://api.opensea.io/v2/chain/ethereum/contract/${frameContract}/nfts/${tokenId}`
+  const url = `https://api.opensea.io/v2/chain/ethereum/contract/${encodeURIComponent(frameContract)}/nfts/${encodeURIComponent(tokenId)}`
   
   console.log(`🎯 Fetching Frame NFT #${tokenId} directly: ${url}`)
   
@@ -146,22 +164,40 @@ function nftImageUrl(nft: any): string {
     : `https://placehold.co/300x300/3a1c71/ffffff?text=0N1+%23${nft.identifier}`
 }
 
-export const GET = withOptionalAuth(async (req: NextRequest, sessionInfo) => {
+// Phase 2: authentication comes from a Supabase session (Bearer JWT), never
+// from the old custom JWT stack. The ?address= param is NOT an identity — it
+// only names the public on-chain address whose NFT list is being fetched
+// (OpenSea account holdings are public data), so it grants nothing sensitive.
+export async function GET(req: NextRequest) {
   console.log(`🚀 UNIFIED CHARACTERS API CALLED: ${new Date().toISOString()}`)
 
-  // Get wallet address from authentication (secure) or legacy parameter (backward compatibility)
-  const walletAddress = await getRequestWalletAddress(req, sessionInfo)
+  const auth = await getRequestUser(req)
+  const isAuthenticated = auth !== null
+
+  const { searchParams } = new URL(req.url)
+  const addressParam = searchParams.get('address') || searchParams.get('walletAddress')
+  const walletAddress = addressParam ? addressParam.toLowerCase() : null
 
   if (!walletAddress) {
-    return NextResponse.json({ 
-      error: 'Authentication required',
-      message: 'Please authenticate with your wallet or provide a valid address parameter',
-      authenticationUrl: '/api/auth/challenge'
-    }, { status: 401 })
+    return NextResponse.json({
+      error: 'Address required',
+      message: 'Provide the wallet address to fetch characters for'
+    }, { status: 400 })
+  }
+
+  // Validate the wallet is a well-formed EOA address BEFORE any external fetch.
+  // getAddress() throws on anything that is not a 20-byte hex address, which
+  // blocks path/parameter injection into the outbound OpenSea URLs.
+  try {
+    getAddress(walletAddress)
+  } catch {
+    return NextResponse.json({
+      error: 'Invalid Ethereum address format'
+    }, { status: 400 })
   }
 
   console.log(`Fetching unified characters for address ${walletAddress}`)
-  console.log(`🔐 Authentication status: ${sessionInfo.isAuthenticated ? 'AUTHENTICATED' : 'LEGACY_MODE'}`)
+  console.log(`🔐 Authentication status: ${isAuthenticated ? 'AUTHENTICATED' : 'ANONYMOUS'}`)
 
   // Demo wallet: return demo characters without hitting the ownership APIs.
   // Dev mode surfaces the full demo set; production sample mode surfaces ONLY
@@ -179,7 +215,6 @@ export const GET = withOptionalAuth(async (req: NextRequest, sessionInfo) => {
   }
 
   // Apply enhanced rate limits for authenticated users
-  const isAuthenticated = sessionInfo.isAuthenticated
   const rateLimitResult = checkOpenSeaRateLimitEnhanced(req, isAuthenticated)
   if (!rateLimitResult.allowed) {
     const limit = isAuthenticated ? '100' : '30' // Enhanced limits for authenticated users
@@ -224,7 +259,13 @@ export const GET = withOptionalAuth(async (req: NextRequest, sessionInfo) => {
 
     // Now, for each Force NFT, try to fetch the corresponding Frame NFT
     console.log(`🎯 Checking for Frame NFTs corresponding to Force NFTs...`)
-    const frameNftPromises = validForceNfts.map(forceNft => 
+    // Bound the per-token Frame fan-out so a whale wallet can't amplify one
+    // request into an unbounded number of outbound OpenSea fetches.
+    const forceNftsForFrameLookup = validForceNfts.slice(0, MAX_FRAME_LOOKUPS)
+    if (validForceNfts.length > MAX_FRAME_LOOKUPS) {
+      console.log(`⚠️ Capping Frame lookups at ${MAX_FRAME_LOOKUPS} (wallet has ${validForceNfts.length} Force NFTs)`)
+    }
+    const frameNftPromises = forceNftsForFrameLookup.map(forceNft =>
       fetchFrameNftByTokenId(forceNft.identifier)
     )
     
@@ -233,7 +274,7 @@ export const GET = withOptionalAuth(async (req: NextRequest, sessionInfo) => {
       .map((result, index) => {
         if (result.status === 'fulfilled' && result.value) {
           const frameNft = result.value
-          const tokenId = validForceNfts[index].identifier
+          const tokenId = forceNftsForFrameLookup[index].identifier
           
           // Verify the user owns this Frame NFT
           const userOwnsFrame = frameNft.owners?.some((owner: any) => 
@@ -403,4 +444,4 @@ export const GET = withOptionalAuth(async (req: NextRequest, sessionInfo) => {
       totalCount: 0
     }, { status: 500 })
   }
-})
+}

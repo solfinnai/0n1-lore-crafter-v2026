@@ -9,9 +9,13 @@ import {
   DAILY_LIMITS,
   createDailyLimitResponse,
   checkSampleDailyLimit,
-  createSampleLimitResponse
+  createSampleLimitResponse,
+  resolveUsageKey,
+  estimateTokensFromText,
+  MAX_AI_REQUEST_CHARS,
 } from '@/lib/rate-limit'
 import { isDemoWallet } from '@/lib/dev-mode'
+import { getRequestUser } from '@/lib/supabase-server'
 import { claudeComplete, isClaudeConfigured } from '@/lib/ai/claude'
 
 export async function POST(request: NextRequest) {
@@ -91,15 +95,37 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Check daily usage limits per wallet if wallet address is available.
+    // Reject oversized request bodies before doing any paid work.
+    if (JSON.stringify(characterData).length > MAX_AI_REQUEST_CHARS) {
+      return NextResponse.json({ error: "Request too large" }, { status: 400 })
+    }
+
+    // Resolve the daily-usage identity. A valid Supabase session takes precedence
+    // (the user's id is the bucket key, so limits follow the account, not a
+    // self-asserted wallet); logged-out owners bucket by wallet; anonymous
+    // callers fall back to a trusted-IP bucket so they are STILL metered.
     // The shared demo wallet is excluded - sample sessions are capped per-IP
     // above; pooling them into one wallet bucket would lock all sample users
     // out together.
-    if (walletAddress && !isDemoWallet(walletAddress)) {
-      // AI assistant suggestions are lighter than full chat responses
-      const estimatedTokens = Math.ceil(300 / 4) // Estimated tokens for AI assistant response
-      
-      const dailyUsageResult = checkAndRecordDailyUsage(walletAddress, 'ai_messages', estimatedTokens)
+    const auth = await getRequestUser(request)
+    const usageKey = resolveUsageKey(request, auth?.user.id, walletAddress)
+    const shouldMeter = !isDemoWallet(usageKey)
+
+    // Generate enhanced system prompt
+    const systemPrompt = generateEnhancedSystemPrompt({
+      characterData,
+      currentStep,
+      subStep,
+    })
+
+    // Create a user prompt based on the character data and current step/subStep
+    const userPrompt = createUserPrompt(characterData, currentStep, subStep)
+
+    // Meter the daily cap AFTER assembling the prompt, charging tokens estimated
+    // from the ACTUAL assembled text (system prompt + user prompt).
+    if (shouldMeter) {
+      const estimatedTokens = estimateTokensFromText(systemPrompt, userPrompt)
+      const dailyUsageResult = checkAndRecordDailyUsage(usageKey, 'ai_messages', estimatedTokens)
       if (!dailyUsageResult.allowed) {
         // Return fallback suggestions with rate limit info
         return NextResponse.json(
@@ -109,7 +135,7 @@ export async function POST(request: NextRequest) {
             suggestions: getMockSuggestions(currentStep, subStep),
             dailyLimitInfo: createDailyLimitResponse(dailyUsageResult.remaining, dailyUsageResult.resetTime, "AI assistant")
           },
-          { 
+          {
             status: 200, // Return 200 with fallback instead of 429 to maintain UX
             headers: {
               'X-Daily-Limit-AI-Messages': String(DAILY_LIMITS.ai_messages),
@@ -124,16 +150,6 @@ export async function POST(request: NextRequest) {
         )
       }
     }
-
-    // Generate enhanced system prompt
-    const systemPrompt = generateEnhancedSystemPrompt({
-      characterData,
-      currentStep,
-      subStep,
-    })
-
-    // Create a user prompt based on the character data and current step/subStep
-    const userPrompt = createUserPrompt(characterData, currentStep, subStep)
 
     // Call Claude
     try {
@@ -153,8 +169,8 @@ export async function POST(request: NextRequest) {
 
       // Add usage info to response headers (not for the shared demo wallet)
       const responseHeaders: Record<string, string> = {}
-      if (walletAddress && !isDemoWallet(walletAddress)) {
-        const currentUsage = getDailyUsage(walletAddress)
+      if (shouldMeter) {
+        const currentUsage = getDailyUsage(usageKey)
         if (currentUsage.allowed) {
           responseHeaders['X-Daily-Remaining-AI-Messages'] = currentUsage.remaining.aiMessages.toString()
           responseHeaders['X-Daily-Remaining-Summaries'] = currentUsage.remaining.summaries.toString()

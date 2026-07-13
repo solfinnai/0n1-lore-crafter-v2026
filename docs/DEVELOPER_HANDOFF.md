@@ -122,7 +122,7 @@ Clients: `lib/ai/claude.ts`, `lib/ai/llama.ts` (null-client guards, typed error 
 | `NEXT_PUBLIC_ENABLE_SAMPLE_MODE` | `true` | production sample mode (build-time inlined — set in Vercel, redeploy) |
 | `NEXT_PUBLIC_DEV_MODE`, `AUTH_DEV_MODE` | local only | never set in prod |
 | `JWT_SECRET`, `JWT_REFRESH_SECRET`, etc. | dead stack | falls back to a hardcoded dev secret (`lib/auth.ts:29`) — goes away when the stack is deleted |
-| `SUPABASE_*` | placeholders | client is null; Phase 2 uses a NEW project |
+| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` | live locally | NEW project `0n1-lore-crafter` (ref `bmyvuotmpjlasrccfzzj`, us-west-1, $10/mo); **must also be set in Vercel before publishing Phase 2**. No service-role key anywhere — server routes use user-scoped JWT clients under RLS. |
 
 **Workflows:**
 
@@ -161,7 +161,7 @@ Phases were decided through a four-role architecture debate (auth architect, dat
 | Sample mode | Walletless full experience with pinned #922; per-IP sample caps | ✅ shipped (`NEXT_PUBLIC_ENABLE_SAMPLE_MODE` set in Vercel) |
 | **Phase 0** | Backup All / Import Backup (souls page) | ✅ shipped |
 | **Phase 1** | Signed Canon Submission export (JSON) + .md character sheet | ✅ shipped |
-| **Phase 2** | **Supabase accounts + cloud save** | ⬅️ **NEXT** (design final, not started) |
+| **Phase 2** | **Supabase accounts + cloud save** | ✅ **built & verified 2026-07-12** (see below) |
 | Phase 3 | Chat-memory/archives sync, profile page, in-app submissions table | designed at sketch level |
 | Canon engine | Separate service ingesting + re-verifying signed submission files | aspirational; the file format is its API |
 
@@ -179,6 +179,18 @@ Phases were decided through a four-role architecture debate (auth architect, dat
 8. **Delete:** custom auth stack, `storage-supabase.ts`, the `?address=` trust fallback (`getRequestWalletAddress` should only trust Supabase sessions or explicit legacy read-only paths).
 
 **Definition of done:** two browsers, one account — soul created in A appears in B; delete in A deletes in B (tombstone, not resurrection); offline edits sync on reconnect; sample mode unchanged; a Supabase outage degrades to today's app with a visible sync-status indicator (`components/sync-status.tsx` exists as a shell).
+
+### Phase 2 as built (2026-07-12)
+
+Implemented on branch `phase-2-accounts` per the spec above, then hardened through a two-device live-fire suite and a 4-lens adversarial review (18 raw findings → 14 confirmed → all fixed). Deviations/additions worth knowing:
+
+- **Auth**: `components/auth/session-provider.tsx` (+ `SignInButton`/dialog in `components/auth/sign-in-dialog.tsx`) — email OTP + `signInWithWeb3({chain:'ethereum'})` (needed supabase-js ≥2.110; 2.57's auth-js was Solana-only). Sessions feed `setCurrentUserId()`; AI/usage fetches attach `Authorization: Bearer` via `lib/auth-headers.ts`.
+- **Sync engine** (`lib/storage-hybrid.ts`): as specced, plus fixes the spec didn't foresee — serialized flushes (concurrent flushes erased dirty flags), `lib/storage.ts#applySoulSnapshot` (pulls must not re-stamp `lastUpdated`), and a tombstone contract: the local map holds only **unpushed local deletes**; pushed/remote tombstones live server-side, where the `souls_lww_guard` BEFORE UPDATE trigger (migration `20260713_souls_lww_guard.sql`) rejects any older `updated_at` — this trigger is what makes "where incoming updated_at newer" real. Backup **import re-enters the sync layer** (re-stamps + marks dirty + clears tombstones) so restores sync and survive old cloud tombstones.
+- **Wallet-link** (`app/api/wallet-link/{challenge,verify}` + UI in the account dialog): nonces per `(address, user_id)` — address-only PK allowed challenge-squatting DoS. Verify = server-reconstructed message + `ethers.verifyMessage`; `linked_wallets UNIQUE(address)` is the ownership arbiter. EIP-1271 refused (same policy as canon export).
+- **Deleted**: the entire custom auth stack (`app/api/auth/*`, `lib/session.ts`, `use-simple-auth`, `auth-middleware`, hardcoded JWT dev secret). `lib/auth.ts` keeps only `isDevMode()`. `?address=` is now a public-data lookup param only; AI routes bucket rate limits by Supabase `user.id` when authenticated.
+- **Tests**: `tests/storage-hybrid.test.ts` (19 cases: LWW, tombstones, dirty-set persistence, demo exclusion, upsert payload shape) + two scratchpad live suites run against the real project (two-device DoD 11/11; wallet-link e2e 7/7 incl. 401/wrong-key/replay).
+
+**Remaining owner steps before publishing**: (1) Supabase dashboard → Auth → Providers → enable **Web3 Wallet**; (2) Auth → URL Configuration → add the Vercel URL to redirect URLs; (3) optionally edit the Magic Link email template to include `{{ .Token }}` so the email carries a 6-digit code (the dialog handles both link and code); (4) set the two `NEXT_PUBLIC_SUPABASE_*` vars in Vercel and publish.
 
 ---
 

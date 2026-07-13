@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { BookOpen, Home, Library } from "lucide-react"
 import { SyncStatus } from "@/components/sync-status"
+import { SignInButton } from "@/components/auth/sign-in-dialog"
 
 export function Header() {
   const pathname = usePathname()
@@ -14,9 +15,9 @@ export function Header() {
   return (
     <header className="sticky top-0 z-50 w-full border-b border-purple-500/20 bg-black/80 backdrop-blur-md">
       <div className="container flex h-16 items-center justify-between">
-        <div className="flex items-center gap-6">
-          <Link href="/" className="flex items-center space-x-2">
-            <span className="text-xl font-bold tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-500">
+        <div className="flex min-w-0 items-center gap-6">
+          <Link href="/" className="flex min-w-0 items-center space-x-2">
+            <span className="truncate whitespace-nowrap text-lg sm:text-xl font-bold tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-500">
               0N1 Lore Crafter
             </span>
           </Link>
@@ -52,7 +53,7 @@ export function Header() {
           </nav>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 sm:gap-4">
           {pathname === "/" ? (
             <Button variant="ghost" size="sm" className="md:hidden" onClick={() => router.push("/souls")}>
               <BookOpen className="h-5 w-5" />
@@ -63,6 +64,7 @@ export function Header() {
             </Button>
           )}
           <SyncStatus />
+          <SignInButton />
           <WalletConnectButton compact />
         </div>
       </div>

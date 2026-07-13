@@ -93,14 +93,68 @@ export function createSampleLimitResponse(resetTime: number) {
 }
 
 export function getClientIP(request: NextRequest): string {
+  // Derive the client IP from a source the client CANNOT spoof.
+  //
+  // On Vercel the edge sets `x-vercel-forwarded-for` and `x-real-ip` from the
+  // real connecting IP and OVERWRITES any client-supplied copy, so both are
+  // trustworthy. The client-supplied `x-forwarded-for` LEFTMOST token is
+  // attacker-controlled — rotating it would mint a fresh rate-limit bucket per
+  // request and defeat every IP limit — so we NEVER trust the leftmost entry.
+  //
+  // Order: x-vercel-forwarded-for → x-real-ip → RIGHTMOST x-forwarded-for
+  // (nearest trusted proxy, never the leftmost) → "unknown".
+  const vercelForwarded = request.headers.get("x-vercel-forwarded-for")
+  if (vercelForwarded) {
+    // Vercel controls this header; the leftmost entry is the true client IP.
+    const ip = vercelForwarded.split(",")[0]?.trim()
+    if (ip) return ip
+  }
+
+  const realIP = request.headers.get("x-real-ip")
+  if (realIP && realIP.trim()) return realIP.trim()
+
   const forwardedFor = request.headers.get("x-forwarded-for")
   if (forwardedFor) {
-    const ips = forwardedFor.split(",").map((ip) => ip.trim())
-    return ips[0]
+    const ips = forwardedFor.split(",").map((ip) => ip.trim()).filter(Boolean)
+    // Rightmost = nearest trusted hop. The leftmost is client-supplied and spoofable.
+    if (ips.length > 0) return ips[ips.length - 1]
   }
-  const realIP = request.headers.get("x-real-ip")
-  if (realIP) return realIP
+
   return "unknown"
+}
+
+/** Hard ceiling on the assembled prompt text an AI route will accept per request. */
+export const MAX_AI_REQUEST_CHARS = 100_000
+
+/** Per-message ceiling for a single chat turn (the attacker-controlled field). */
+export const MAX_CHAT_MESSAGE_CHARS = 8_000
+
+/**
+ * Resolve the daily-usage bucket key for a request. Precedence:
+ *   1. Authenticated Supabase user id — NEVER a client-asserted wallet, so a
+ *      spoofed walletAddress can't charge (or read) someone else's account.
+ *   2. Client-supplied wallet address (logged-out NFT owners).
+ *   3. Trusted-IP bucket (`ip:<addr>`) — anonymous callers are STILL metered so
+ *      they cannot bypass the daily cap by simply omitting identity.
+ * Always returns a non-null key. Callers apply the demo-wallet carve-out
+ * separately (sample sessions are capped per-IP, not through this bucket).
+ */
+export function resolveUsageKey(
+  request: NextRequest,
+  userId: string | null | undefined,
+  walletAddress: string | null | undefined,
+): string {
+  if (userId) return userId
+  if (typeof walletAddress === "string" && walletAddress.trim()) {
+    return walletAddress.trim().toLowerCase()
+  }
+  return `ip:${getClientIP(request)}`
+}
+
+/** Rough token estimate from the ACTUAL assembled prompt text (~4 chars/token). */
+export function estimateTokensFromText(...parts: Array<string | null | undefined>): number {
+  const total = parts.reduce((acc, p) => acc + (p ? p.length : 0), 0)
+  return Math.ceil(total / 4)
 }
 
 export async function getWalletAddress(request: NextRequest): Promise<string | null> {

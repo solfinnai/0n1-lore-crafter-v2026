@@ -24,6 +24,7 @@ import Image from "next/image"
 import type { CharacterData } from "@/lib/types"
 import type { CharacterMemoryProfile } from "@/lib/memory-types"
 import { getMemoryProfile } from "@/lib/memory-types"
+import { authHeaders } from "@/lib/auth-headers"
 
 interface CharacterDossierProps {
   characterData: CharacterData
@@ -52,6 +53,7 @@ export function CharacterDossier({ characterData, className = "" }: CharacterDos
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(await authHeaders()),
         },
         body: JSON.stringify({
           characterData,

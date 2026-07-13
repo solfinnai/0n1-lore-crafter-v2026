@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react"
 import { useWallet } from "@/components/wallet/wallet-provider"
+import { authHeaders } from "@/lib/auth-headers"
 
 interface UsageData {
   aiMessages: { used: number; limit: number }
@@ -102,7 +103,7 @@ export function useUsageTracking(): UsageTrackingHook {
       // Make a lightweight request to get current usage
       const response = await fetch('/api/usage-check', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
         body: JSON.stringify({ walletAddress: address })
       })
 

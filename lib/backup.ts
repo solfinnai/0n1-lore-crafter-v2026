@@ -140,19 +140,48 @@ export function applyBackup(backup: BackupFile): ImportResult {
       local = []
     }
     const byPfp = new Map(local.map((s) => [String(s.data?.pfpId), s]))
+    const restored: string[] = []
     for (const soul of incoming) {
       const key = String(soul.data.pfpId)
       const existing = byPfp.get(key)
       if (!existing) {
         byPfp.set(key, soul)
+        restored.push(key)
         result.soulsAdded++
       } else {
         const incomingTime = Date.parse(soul.lastUpdated || "") || 0
         const existingTime = Date.parse(existing.lastUpdated || "") || 0
         if (incomingTime > existingTime) {
           byPfp.set(key, soul)
+          restored.push(key)
           result.soulsUpdated++
         }
+      }
+    }
+
+    // A restore is a deliberate user write NOW, so it must re-enter the cloud
+    // sync layer (shared localStorage contract with lib/storage-hybrid):
+    // re-stamp lastUpdated so an old cloud tombstone can't re-delete the
+    // restored soul at the next merge, mark it dirty so it uploads, and clear
+    // any local tombstone shadowing it. Without this, imported souls never
+    // sync and a soul restored after a cloud delete is silently re-deleted.
+    if (restored.length > 0) {
+      const nowIso = new Date().toISOString()
+      for (const key of restored) {
+        const soul = byPfp.get(key)!
+        byPfp.set(key, { ...soul, lastUpdated: nowIso })
+      }
+      try {
+        const dirtyRaw = JSON.parse(window.localStorage.getItem("oni-souls-dirty") || "[]")
+        const dirty = new Set<string>(Array.isArray(dirtyRaw) ? dirtyRaw.map(String) : [])
+        for (const key of restored) dirty.add(key)
+        window.localStorage.setItem("oni-souls-dirty", JSON.stringify([...dirty]))
+
+        const tombs = JSON.parse(window.localStorage.getItem("oni-souls-tombstones") || "{}")
+        for (const key of restored) delete tombs[key]
+        window.localStorage.setItem("oni-souls-tombstones", JSON.stringify(tombs))
+      } catch {
+        // Sync bookkeeping is best-effort — the souls themselves are saved.
       }
     }
     window.localStorage.setItem("oni-souls", JSON.stringify(Array.from(byPfp.values())))

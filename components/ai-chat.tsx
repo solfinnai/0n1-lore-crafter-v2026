@@ -10,6 +10,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Sparkles, Send, RefreshCw, AlertCircle, Copy } from "lucide-react"
 import type { CharacterData } from "@/lib/types"
 import { useWallet } from "@/components/wallet/wallet-provider"
+import { authHeaders } from "@/lib/auth-headers"
 import { toast } from "sonner"
 
 interface Message {
@@ -95,6 +96,7 @@ export function AiChat({ characterData, currentStep, subStep = null }: AiChatPro
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(await authHeaders()),
         },
         body: JSON.stringify({
           message: userMessage,

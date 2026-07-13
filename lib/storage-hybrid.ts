@@ -16,7 +16,7 @@
  */
 import type { CharacterData } from "./types"
 import { supabase } from "./supabase"
-import { isDemoWallet } from "./dev-mode"
+import { DEMO_TOKEN_IDS, isDemoWallet } from "./dev-mode"
 import { isSampleToken, SAMPLE_TOKEN_ID } from "./sample-token"
 import * as local from "./storage"
 import type { StoredSoul } from "./storage"
@@ -28,27 +28,181 @@ const TOMBSTONE_KEY = "oni-souls-tombstones"
 const SYNC_KEY = "oni-souls-last-sync"
 const SYNC_STATUS_KEY = "oni-souls-sync-status"
 
+// Owner of the content currently sitting in this browser's localStorage.
+// Holds the Supabase user id of the authenticated owner, or is ABSENT when the
+// content is anonymous (created logged-out) or the browser is empty. Absent is
+// the "adoptable" state: the first user to sign in legitimately inherits an
+// anonymous library (intended first-login migration). A DIFFERENT authenticated
+// id means someone else's data is present and must be wiped before the next
+// account touches it (cross-user leak — audit findings 8 & 11).
+const OWNER_KEY = "oni-content-owner"
+
+// Every localStorage key that holds user-created content or sync bookkeeping.
+// Mirrors the content set in lib/backup.ts (EXACT_KEYS + PREFIX_KEYS) and adds
+// the four soul-sync keys. On an authenticated-owner change we wipe all of
+// these so one account's souls/chats can never bleed into another's session.
+const CONTENT_KEYS = [
+  "oni-souls",
+  DIRTY_KEY,
+  TOMBSTONE_KEY,
+  SYNC_KEY,
+  SYNC_STATUS_KEY,
+  "ai_agent_memories",
+  "ai_agent_conversations",
+  "oni-memory-profiles",
+  "oni-chat-archives",
+  "oni-user-metrics",
+  "oni-character-insights",
+  "oni-canon-exports",
+] as const
+const CONTENT_KEY_PREFIXES = ["chat-settings-", "memory-segments-", "privacy-settings-"] as const
+
 let currentUserId: string | null = null
 let currentWalletAddress: string | null = null
 let flushTimer: ReturnType<typeof setTimeout> | null = null
-let syncStatus: "idle" | "syncing" | "error" | "offline" | "local-only" = "local-only"
+
+export type SyncStatus = "idle" | "syncing" | "error" | "offline" | "local-only"
+
+let syncStatus: SyncStatus = "local-only"
+const statusListeners = new Set<(status: SyncStatus) => void>()
 
 export function setCurrentWalletAddress(address: string | null) {
   currentWalletAddress = address
+  refreshBaseStatus()
 }
 
 export function setCurrentUserId(userId: string | null) {
   currentUserId = userId
+  // Reconcile only for a real authenticated identity. A null id (no active
+  // session / passive cold-load) is handled conservatively: we never wipe here,
+  // so a returning user keeps their local souls and unsynced edits. Deliberate
+  // sign-out clearing goes through clearAuthenticatedContentOnSignOut().
+  if (userId) reconcileContentOwner(userId)
+  refreshBaseStatus()
 }
 
-export function getSyncStatus() {
+/** localStorage id of the authenticated owner of the local content, or null. */
+function readContentOwner(): string | null {
+  if (typeof window === "undefined") return null
+  return window.localStorage.getItem(OWNER_KEY)
+}
+
+function writeContentOwner(id: string) {
+  if (typeof window === "undefined") return
+  window.localStorage.setItem(OWNER_KEY, id)
+}
+
+function clearContentOwner() {
+  if (typeof window === "undefined") return
+  window.localStorage.removeItem(OWNER_KEY)
+}
+
+/**
+ * Wipe every content + sync key from localStorage. Used when the authenticated
+ * owner of the browser changes, so no account's souls/chats survive into a
+ * different account's (or another person's) session. Does NOT touch the owner
+ * key itself (managed by the caller) or non-content prefs (e.g. onboarding).
+ */
+function clearLocalContent() {
+  if (typeof window === "undefined") return
+  const ls = window.localStorage
+  const toRemove: string[] = []
+  for (let i = 0; i < ls.length; i++) {
+    const key = ls.key(i)
+    if (!key) continue
+    if (
+      (CONTENT_KEYS as readonly string[]).includes(key) ||
+      CONTENT_KEY_PREFIXES.some((p) => key.startsWith(p))
+    ) {
+      toRemove.push(key)
+    }
+  }
+  for (const key of toRemove) ls.removeItem(key)
+  if (flushTimer) {
+    clearTimeout(flushTimer)
+    flushTimer = null
+  }
+}
+
+/**
+ * Decide whether the current local content may pass to `userId` (audit §8).
+ * Decision table (prev = persisted owner):
+ *   prev absent (anon/empty)  -> adopt: keep content, this user now owns it
+ *                                (the intended first-login anon migration)
+ *   prev === userId           -> no-op: same owner, e.g. TOKEN_REFRESHED
+ *   prev = a DIFFERENT auth id -> wipe prev owner's content, THEN adopt
+ *                                (shared-browser cross-user isolation)
+ */
+function reconcileContentOwner(userId: string) {
+  const prev = readContentOwner()
+  if (prev === userId) return
+  if (prev !== null) {
+    // A different authenticated user owned this browser's content. Their souls,
+    // chats and dirty/tombstone queues must not merge into, upload to, or be
+    // visible under the new account. Wipe before mergeFromRemote pulls/uploads.
+    clearLocalContent()
+  }
+  writeContentOwner(userId)
+}
+
+/**
+ * Deliberate sign-out: leave the browser a clean anonymous slate for whoever
+ * uses it next. Clears the authenticated owner's content (their data is safe in
+ * the cloud and re-merges on next login) and drops the owner marker. Anonymous
+ * content (no owner recorded) is left untouched — logged-out souls belong to
+ * the browser and must survive per the app's logged-out invariant.
+ */
+export function clearAuthenticatedContentOnSignOut() {
+  const prev = readContentOwner()
+  currentUserId = null
+  if (prev !== null) {
+    clearLocalContent()
+    clearContentOwner()
+  }
+  refreshBaseStatus()
+}
+
+export function getSyncStatus(): SyncStatus {
   return syncStatus
 }
 
-function setStatus(s: typeof syncStatus) {
+/** Subscribe to sync-status changes. Returns an unsubscribe function. */
+export function subscribeSyncStatus(listener: (status: SyncStatus) => void): () => void {
+  statusListeners.add(listener)
+  return () => {
+    statusListeners.delete(listener)
+  }
+}
+
+/** Epoch ms of the last successful flush, or null if never synced. */
+export function getLastSyncTime(): number | null {
+  if (typeof window === "undefined") return null
+  const raw = window.localStorage.getItem(SYNC_KEY)
+  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function setStatus(s: SyncStatus) {
   syncStatus = s
   if (typeof window !== "undefined") {
     window.localStorage.setItem(SYNC_STATUS_KEY, s)
+  }
+  statusListeners.forEach((listener) => {
+    try {
+      listener(s)
+    } catch (e) {
+      console.error("sync status listener failed", e)
+    }
+  })
+}
+
+/** Re-derive the resting status after identity (user/wallet) changes. */
+function refreshBaseStatus() {
+  if (!cloudEnabled()) {
+    setStatus("local-only")
+  } else if (syncStatus === "local-only") {
+    const offline = typeof navigator !== "undefined" && !navigator.onLine
+    setStatus(offline ? "offline" : "idle")
   }
 }
 
@@ -76,8 +230,17 @@ function writeDirty(set: Set<string>) {
 }
 
 function markDirty(nftId: string) {
+  const id = String(nftId)
+  // A live local write supersedes any pending tombstone for this NFT (LWW):
+  // the upsert sends deleted_at: null, reviving the remote row. Without this,
+  // a re-created soul stays shadowed by its old tombstone and never syncs.
+  const tombs = readTombstones()
+  if (tombs[id]) {
+    delete tombs[id]
+    writeTombstones(tombs)
+  }
   const d = readDirty()
-  d.add(String(nftId))
+  d.add(id)
   writeDirty(d)
   scheduleFlush()
 }
@@ -98,7 +261,9 @@ function writeTombstones(map: Record<string, string>) {
 
 function shouldSkipSoul(soul: StoredSoul): boolean {
   const nftId = String(soul.data?.pfpId || "")
-  if (isSampleToken(nftId) || nftId === SAMPLE_TOKEN_ID) return true
+  // Sample #922 AND the dev-mode demo tokens: shared demo artifacts must never
+  // reach a real user's cloud account — the first-login upload path included.
+  if (isSampleToken(nftId) || DEMO_TOKEN_IDS.includes(nftId)) return true
   return false
 }
 
@@ -158,7 +323,20 @@ async function tombstoneRemote(nftId: string, deletedAt: string): Promise<boolea
   return true
 }
 
-export async function flushDirty(): Promise<void> {
+let flushInFlight: Promise<void> | null = null
+
+export function flushDirty(): Promise<void> {
+  // Serialize flushes: the debounce timer, visibilitychange, the online
+  // handler, and merge-on-login can all overlap; concurrent runs would write
+  // back stale dirty-set snapshots, erasing flags added mid-flight.
+  if (flushInFlight) return flushInFlight
+  flushInFlight = doFlush().finally(() => {
+    flushInFlight = null
+  })
+  return flushInFlight
+}
+
+async function doFlush(): Promise<void> {
   if (!cloudEnabled()) {
     setStatus("local-only")
     return
@@ -166,38 +344,65 @@ export async function flushDirty(): Promise<void> {
   setStatus("syncing")
   const dirty = readDirty()
   const tombs = readTombstones()
+  const flushed: string[] = []
+  let tombstoneFailures = 0
 
   for (const nftId of Object.keys(tombs)) {
-    await tombstoneRemote(nftId, tombs[nftId])
+    if (await tombstoneRemote(nftId, tombs[nftId])) {
+      // Pushed: drop the map entry so it isn't re-sent on every flush forever.
+      // A later pull re-adopts it from the remote row while it still matters.
+      // Guarded re-read: a delete recorded mid-flight (newer timestamp) stays.
+      const current = readTombstones()
+      if (current[nftId] === tombs[nftId]) {
+        delete current[nftId]
+        writeTombstones(current)
+      }
+    } else {
+      tombstoneFailures++
+    }
   }
 
   for (const nftId of dirty) {
     if (tombs[nftId]) {
-      dirty.delete(nftId)
+      flushed.push(nftId)
       continue
     }
     const soul = local.getSoulByNftId(nftId)
     if (!soul || shouldSkipSoul(soul)) {
-      dirty.delete(nftId)
+      flushed.push(nftId)
       continue
     }
-    const ok = await upsertSoul(soul)
-    if (ok) dirty.delete(nftId)
+    if (await upsertSoul(soul)) flushed.push(nftId)
   }
 
-  writeDirty(dirty)
+  // Re-read at write-back and only remove what THIS run flushed — flags added
+  // while the network calls were in flight must survive.
+  const remaining = readDirty()
+  for (const nftId of flushed) remaining.delete(nftId)
+  writeDirty(remaining)
   if (typeof window !== "undefined") {
     window.localStorage.setItem(SYNC_KEY, String(Date.now()))
   }
-  setStatus(dirty.size === 0 ? "idle" : "error")
+  // A failed tombstone push is unsynced work too — never show "Synced" for it.
+  setStatus(remaining.size === 0 && tombstoneFailures === 0 ? "idle" : "error")
+}
+
+export interface MergeSummary {
+  /** True when the remote had no rows for this user (first login). */
+  firstLogin: boolean
+  /** Local souls queued for upload because the remote didn't have them. */
+  queued: number
+  /** Of those, how many actually reached the cloud in this merge's flush. */
+  uploaded: number
 }
 
 /**
  * Merge remote rows by nft_id. Newest updated_at wins.
  * Tombstones beat live rows both directions.
  */
-export async function mergeFromRemote(): Promise<void> {
-  if (!cloudEnabled() || !supabase || !currentUserId) return
+export async function mergeFromRemote(): Promise<MergeSummary> {
+  const summary: MergeSummary = { firstLogin: false, queued: 0, uploaded: 0 }
+  if (!cloudEnabled() || !supabase || !currentUserId) return summary
 
   const { data, error } = await supabase
     .from("souls")
@@ -207,7 +412,7 @@ export async function mergeFromRemote(): Promise<void> {
   if (error) {
     console.error("pull souls failed", error)
     setStatus("error")
-    return
+    return summary
   }
 
   const tombs = readTombstones()
@@ -219,8 +424,19 @@ export async function mergeFromRemote(): Promise<void> {
     if (nftId === SAMPLE_TOKEN_ID) continue
 
     if (row.deleted_at) {
-      tombs[nftId] = row.deleted_at
       const existing = byNft.get(nftId)
+      const tombstoneAt = Date.parse(row.deleted_at) || 0
+      const localUpdated = existing ? Date.parse(existing.lastUpdated) || 0 : 0
+      if (existing && localUpdated > tombstoneAt) {
+        // Local live write is newer than the remote tombstone — the soul was
+        // re-created after the delete. LWW: keep it and push the revival.
+        markDirty(nftId)
+        continue
+      }
+      // Honor the remote tombstone locally. It is NOT copied into the local
+      // map: that map holds only unpushed LOCAL deletes (the remote already
+      // has this one, and the souls_lww_guard trigger stops any stale live
+      // row from ever overwriting it server-side).
       if (existing) {
         local.deleteSoul(existing.id)
         byNft.delete(nftId)
@@ -229,8 +445,15 @@ export async function mergeFromRemote(): Promise<void> {
     }
 
     if (tombs[nftId]) {
-      // Local tombstone wins until flushed
-      continue
+      const tombAt = Date.parse(tombs[nftId]) || 0
+      const liveAt = Date.parse(row.updated_at) || 0
+      if (liveAt <= tombAt) {
+        // Local tombstone is newer — it wins until flushed
+        continue
+      }
+      // The soul was re-created on another device after our delete (LWW):
+      // drop the stale tombstone and fall through to apply the live row.
+      delete tombs[nftId]
     }
 
     const remoteUpdated = Date.parse(row.updated_at) || 0
@@ -238,13 +461,14 @@ export async function mergeFromRemote(): Promise<void> {
     const localUpdated = localSoul ? Date.parse(localSoul.lastUpdated) || 0 : 0
 
     if (!localSoul || remoteUpdated > localUpdated) {
-      const characterData = row.data as CharacterData
-      if (localSoul) {
-        local.updateSoul(localSoul.id, characterData)
-      } else {
-        // storeSoul generates new id — acceptable; merge key is nft_id
-        local.storeSoul(characterData)
-      }
+      // Apply verbatim with the remote clock — re-stamping lastUpdated with
+      // new Date() would make this copy beat genuinely newer edits elsewhere.
+      local.applySoulSnapshot({
+        id: localSoul?.id ?? String(row.local_id || `${row.updated_at}-${nftId}`),
+        createdAt: String(row.created_at || row.updated_at),
+        lastUpdated: String(row.updated_at),
+        data: row.data as CharacterData,
+      })
     } else if (localUpdated > remoteUpdated) {
       markDirty(nftId)
     }
@@ -252,16 +476,32 @@ export async function mergeFromRemote(): Promise<void> {
 
   writeTombstones(tombs)
 
-  // First login: upload local souls not on remote (excluding sample)
+  // First login: upload local souls not on remote (excluding sample/demo).
+  // Owner guard (audit §11): only auto-upload when this browser's content is
+  // owned by the current identity. setCurrentUserId() runs reconcileContentOwner
+  // before any merge, so a foreign authenticated user's souls have already been
+  // wiped and the owner marker equals currentUserId (either an adopted-anon
+  // library or this user's own). If it somehow doesn't match, refuse to push
+  // another account's residual souls into this one.
   const remoteNfts = new Set((data || []).map((r: any) => String(r.nft_id)))
-  for (const soul of local.getStoredSouls()) {
-    if (shouldSkipSoul(soul)) continue
-    if (!remoteNfts.has(String(soul.data.pfpId)) && !tombs[String(soul.data.pfpId)]) {
-      markDirty(String(soul.data.pfpId))
+  summary.firstLogin = remoteNfts.size === 0
+  const queuedIds: string[] = []
+  if (readContentOwner() === currentUserId) {
+    for (const soul of local.getStoredSouls()) {
+      if (shouldSkipSoul(soul)) continue
+      if (!remoteNfts.has(String(soul.data.pfpId)) && !tombs[String(soul.data.pfpId)]) {
+        markDirty(String(soul.data.pfpId))
+        queuedIds.push(String(soul.data.pfpId))
+      }
     }
   }
+  summary.queued = queuedIds.length
 
   await flushDirty()
+  // Report what actually landed: anything still dirty after the flush failed.
+  const stillDirty = readDirty()
+  summary.uploaded = queuedIds.filter((id) => !stillDirty.has(id)).length
+  return summary
 }
 
 export async function initializeHybridStorage(walletAddress: string, userId?: string | null) {

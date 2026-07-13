@@ -29,6 +29,12 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Token ID is required" }, { status: 400 })
   }
 
+  // Validate the token id is a plain numeric string BEFORE any external fetch.
+  // This blocks path/parameter injection into the outbound OpenSea URL.
+  if (!/^\d+$/.test(tokenId)) {
+    return NextResponse.json({ error: "Invalid token ID format" }, { status: 400 })
+  }
+
   // Normalize token ID by removing leading zeros
   const normalizedTokenId = tokenId.replace(/^0+/, "")
 
@@ -47,7 +53,7 @@ export async function GET(request: NextRequest) {
     console.log(`Fetching OpenSea data for token ${normalizedTokenId}...`)
 
     const response = await fetch(
-      `https://api.opensea.io/api/v2/chain/ethereum/contract/${CONTRACT_ADDRESS}/nfts/${normalizedTokenId}`,
+      `https://api.opensea.io/api/v2/chain/ethereum/contract/${encodeURIComponent(CONTRACT_ADDRESS)}/nfts/${encodeURIComponent(normalizedTokenId)}`,
       {
         headers: {
           Accept: "application/json",

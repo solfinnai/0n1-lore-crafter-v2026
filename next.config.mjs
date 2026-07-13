@@ -75,6 +75,40 @@ const nextConfig = {
     parallelServerBuildTraces: true,
     parallelServerCompiles: true,
   },
+  // Security response headers applied to every route. The app previously
+  // shipped none; this is the mitigating control for the Supabase session
+  // token living in localStorage (no CSP existed to bound XSS blast radius).
+  async headers() {
+    // Pragmatic CSP: Next.js App Router needs 'unsafe-inline' styles and
+    // inline/eval scripts (framework runtime + dev). connect-src is scoped to
+    // Supabase (REST + Realtime websockets) and the OpenSea API; wallet
+    // injection (window.ethereum) is same-origin JS so needs no extra origin.
+    const csp = [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob: https:",
+      "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.opensea.io",
+      "font-src 'self' data:",
+      "frame-ancestors 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+    ].join('; ')
+
+    return [
+      {
+        source: '/(.*)',
+        headers: [
+          { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains; preload' },
+          { key: 'X-Frame-Options', value: 'DENY' },
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+          { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
+          { key: 'Content-Security-Policy', value: csp },
+        ],
+      },
+    ]
+  },
 }
 
 if (userConfig) {

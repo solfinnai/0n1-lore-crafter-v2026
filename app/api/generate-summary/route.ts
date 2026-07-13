@@ -7,10 +7,14 @@ import {
   checkAndRecordDailyUsage,
   getDailyUsage,
   DAILY_LIMITS,
-  createDailyLimitResponse
+  createDailyLimitResponse,
+  resolveUsageKey,
+  estimateTokensFromText,
+  MAX_AI_REQUEST_CHARS,
 } from '@/lib/rate-limit'
 import { claudeComplete, isClaudeConfigured } from '@/lib/ai/claude'
 import { buildSharedCanonContext } from '@/lib/ai/shared-canon-context'
+import { getRequestUser } from '@/lib/supabase-server'
 
 export async function POST(request: NextRequest) {
   try {
@@ -49,30 +53,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Character data is required" }, { status: 400 })
     }
 
-    // Check daily usage limits per wallet if wallet address is provided
-    if (walletAddress) {
-      // Summary generation is a specific operation, track as summaries not ai_messages
-      const estimatedTokens = Math.ceil(200 / 4) // Estimated tokens for summary generation
-      
-      const dailyUsageResult = checkAndRecordDailyUsage(walletAddress, 'summaries', estimatedTokens)
-      if (!dailyUsageResult.allowed) {
-        return NextResponse.json(
-          createDailyLimitResponse(dailyUsageResult.remaining, dailyUsageResult.resetTime, "summary generation"),
-          { 
-            status: 429,
-            headers: {
-              'X-Daily-Limit-AI-Messages': String(DAILY_LIMITS.ai_messages),
-              'X-Daily-Limit-Summaries': String(DAILY_LIMITS.summaries),
-              'X-Daily-Limit-Tokens': String(DAILY_LIMITS.total_tokens),
-              'X-Daily-Remaining-AI-Messages': dailyUsageResult.remaining.aiMessages.toString(),
-              'X-Daily-Remaining-Summaries': dailyUsageResult.remaining.summaries.toString(),
-              'X-Daily-Remaining-Tokens': dailyUsageResult.remaining.totalTokens.toString(),
-              'X-Daily-Reset': new Date(dailyUsageResult.resetTime).toISOString()
-            }
-          }
-        )
-      }
+    // Reject oversized request bodies before doing any paid work.
+    const requestChars =
+      JSON.stringify(characterData).length +
+      (memoryProfile ? JSON.stringify(memoryProfile).length : 0)
+    if (requestChars > MAX_AI_REQUEST_CHARS) {
+      return NextResponse.json({ error: "Request too large" }, { status: 400 })
     }
+
+    // Resolve the daily-usage identity. A valid Supabase session takes precedence
+    // (the user's id is the bucket key, so limits follow the account, not a
+    // self-asserted wallet); logged-out owners bucket by wallet; anonymous
+    // callers fall back to a trusted-IP bucket so they are STILL metered.
+    const auth = await getRequestUser(request)
+    const usageKey = resolveUsageKey(request, auth?.user.id, walletAddress)
 
     // Build context for the summary — classified traits, not raw dump
     let contextText = `Character: ${characterData.soulName} (0N1 Force #${characterData.pfpId})
@@ -103,8 +97,36 @@ ${contextText}
 
 Write exactly 100 words or less. Make it engaging and narrative-focused.`
 
+    const summarySystemPrompt =
+      "You are a skilled storyteller and character analyst for the 0N1 Force Enclave canon. Write compelling, concise character summaries. Never invent masks for Face: Void, never treat Background colors as lineages, never use Neo-Tokyo / Great Merge / Soul-Code lore, and never invent powers outside the provided kit."
+
+    // Meter the daily cap AFTER assembling the prompt, charging tokens estimated
+    // from the ACTUAL assembled text. Summary generation counts as a 'summary'.
+    const dailyUsageResult = checkAndRecordDailyUsage(
+      usageKey,
+      'summaries',
+      estimateTokensFromText(summarySystemPrompt, prompt),
+    )
+    if (!dailyUsageResult.allowed) {
+      return NextResponse.json(
+        createDailyLimitResponse(dailyUsageResult.remaining, dailyUsageResult.resetTime, "summary generation"),
+        {
+          status: 429,
+          headers: {
+            'X-Daily-Limit-AI-Messages': String(DAILY_LIMITS.ai_messages),
+            'X-Daily-Limit-Summaries': String(DAILY_LIMITS.summaries),
+            'X-Daily-Limit-Tokens': String(DAILY_LIMITS.total_tokens),
+            'X-Daily-Remaining-AI-Messages': dailyUsageResult.remaining.aiMessages.toString(),
+            'X-Daily-Remaining-Summaries': dailyUsageResult.remaining.summaries.toString(),
+            'X-Daily-Remaining-Tokens': dailyUsageResult.remaining.totalTokens.toString(),
+            'X-Daily-Reset': new Date(dailyUsageResult.resetTime).toISOString()
+          }
+        }
+      )
+    }
+
     const summary = (await claudeComplete({
-      system: "You are a skilled storyteller and character analyst for the 0N1 Force Enclave canon. Write compelling, concise character summaries. Never invent masks for Face: Void, never treat Background colors as lineages, never use Neo-Tokyo / Great Merge / Soul-Code lore, and never invent powers outside the provided kit.",
+      system: summarySystemPrompt,
       messages: [{ role: "user", content: prompt }],
       maxTokens: 150,
     })).trim()
@@ -115,9 +137,9 @@ Write exactly 100 words or less. Make it engaging and narrative-focused.`
 
     // Return successful response with usage information
     const responseHeaders: Record<string, string> = {}
-    if (walletAddress) {
+    if (usageKey) {
       // Get updated usage info after processing (don't increment again, just get current state)
-      const currentUsage = getDailyUsage(walletAddress)
+      const currentUsage = getDailyUsage(usageKey)
       if (currentUsage.allowed) {
         responseHeaders['X-Daily-Remaining-AI-Messages'] = currentUsage.remaining.aiMessages.toString()
         responseHeaders['X-Daily-Remaining-Summaries'] = currentUsage.remaining.summaries.toString()

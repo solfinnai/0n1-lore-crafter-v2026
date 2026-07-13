@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { getSoulByNftId, type StoredSoul } from "@/lib/storage-wrapper"
 import { createAgentConfig, type AgentConfig } from "@/lib/ai-agent"
+import { authHeaders } from "@/lib/auth-headers"
 import { ArrowLeft, Send, Bot, User, Share, Settings, Clock, Brain, Edit, RotateCcw, Archive } from 'lucide-react'
 import Image from "next/image"
 import { Badge } from "@/components/ui/badge"
@@ -722,6 +723,7 @@ export default function AgentPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(await authHeaders()),
         },
         body: JSON.stringify({
           message: userMessage.content,

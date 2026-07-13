@@ -7,6 +7,7 @@ import { Sparkles, RefreshCw, AlertCircle } from "lucide-react"
 import { getCharacterPowerKit } from "@/lib/lore/canon/match"
 import { useTraitsPanel } from "@/components/traits-panel-context"
 import { useWallet } from "@/components/wallet/wallet-provider"
+import { authHeaders } from "@/lib/auth-headers"
 import type { CharacterData } from "@/lib/types"
 
 interface AiAssistantProps {
@@ -274,6 +275,7 @@ export function AiAssistant({
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            ...(await authHeaders()),
           },
           body: JSON.stringify({
             characterData,

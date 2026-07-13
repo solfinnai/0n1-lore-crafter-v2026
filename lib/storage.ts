@@ -4,6 +4,10 @@ import type { CharacterData } from "./types"
 
 const STORAGE_KEY = "oni-souls"
 
+// Never log soul content (pfpId, soulName, …) in production builds. These logs
+// are debug-only aids; guarding them keeps user content out of prod consoles.
+const isDev = process.env.NODE_ENV !== "production"
+
 export interface StoredSoul {
   id: string // Unique ID for the soul (timestamp + pfpId)
   createdAt: string // ISO date string
@@ -45,19 +49,13 @@ export function getSoulById(id: string): StoredSoul | null {
 
 // Store a new soul or update an existing one
 export function storeSoul(characterData: CharacterData): string {
-  console.log("🟣 STORAGE.TS - storeSoul called")
-  console.log("- pfpId:", characterData.pfpId)
-  console.log("- soulName:", characterData.soulName)
-  
   const souls = getStoredSouls()
-  console.log("- Current souls count:", souls.length)
 
   // Check if a soul already exists for this NFT
   const existingIndex = souls.findIndex((soul) => soul.data.pfpId === characterData.pfpId)
   const timestamp = new Date().toISOString()
-  
+
   if (existingIndex >= 0) {
-    console.log("- Updating existing soul at index:", existingIndex)
     // Update existing soul
     const existingSoul = souls[existingIndex]
     const updatedSoul: StoredSoul = {
@@ -67,15 +65,13 @@ export function storeSoul(characterData: CharacterData): string {
     }
     souls[existingIndex] = updatedSoul
     localStorage.setItem(STORAGE_KEY, JSON.stringify(souls))
-    
-    console.log("✅ Soul updated in localStorage")
-    
+    if (isDev) console.log("storage: updated soul", existingSoul.id)
+
     // Dispatch a storage event to notify other tabs/components
     window.dispatchEvent(new Event("storage"))
-    
+
     return existingSoul.id
   } else {
-    console.log("- Creating new soul")
     // Add new soul
     const id = `${timestamp}-${characterData.pfpId}`
     const newSoul: StoredSoul = {
@@ -86,15 +82,33 @@ export function storeSoul(characterData: CharacterData): string {
     }
     souls.push(newSoul)
     localStorage.setItem(STORAGE_KEY, JSON.stringify(souls))
-    
-    console.log("✅ New soul created with ID:", id)
-    console.log("- Total souls after save:", souls.length)
-    
+    if (isDev) console.log("storage: created soul", id)
+
     // Dispatch a storage event to notify other tabs/components
     window.dispatchEvent(new Event("storage"))
-    
+
     return id
   }
+}
+
+// Apply a synced snapshot verbatim, keyed by nft_id (sync engine only).
+// LWW breaks if pulled rows get re-stamped with the local clock, so this
+// preserves the snapshot's lastUpdated instead of stamping new Date().
+export function applySoulSnapshot(soul: StoredSoul): void {
+  const souls = getStoredSouls()
+  const existingIndex = souls.findIndex((s) => String(s.data.pfpId) === String(soul.data.pfpId))
+
+  if (existingIndex >= 0) {
+    souls[existingIndex] = {
+      ...souls[existingIndex],
+      data: soul.data,
+      lastUpdated: soul.lastUpdated,
+    }
+  } else {
+    souls.push(soul)
+  }
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(souls))
+  window.dispatchEvent(new Event("storage"))
 }
 
 // Update an existing soul by ID

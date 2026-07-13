@@ -26,12 +26,16 @@ export function WalletConnectButton({ compact = false }: { compact?: boolean } =
             variant="outline"
             className="bg-purple-900/50 hover:bg-purple-900/70 text-purple-100 border-purple-500/50"
           >
-            <div className="w-2 h-2 rounded-full bg-green-500 mr-2"></div>
-            {isDemoWallet(address)
-              ? isClientDemoModeEnabled()
-                ? "Demo Wallet"
-                : "Sample Mode"
-              : shortenAddress(address || "")}
+            <div className={`w-2 h-2 rounded-full bg-green-500 ${compact ? "sm:mr-2" : "mr-2"}`}></div>
+            {/* In the compact header the label overflows 390px next to the
+                sync badge + sign-in button; below sm the green dot suffices. */}
+            <span className={compact ? "hidden sm:inline" : ""}>
+              {isDemoWallet(address)
+                ? isClientDemoModeEnabled()
+                  ? "Demo Wallet"
+                  : "Sample Mode"
+                : shortenAddress(address || "")}
+            </span>
           </Button>
           <Button variant="destructive" size="icon" onClick={handleDisconnect} title="Disconnect wallet">
             <LogOut className="h-4 w-4" />
@@ -52,7 +56,16 @@ export function WalletConnectButton({ compact = false }: { compact?: boolean } =
             ) : (
               <>
                 <Wallet className="mr-2 h-4 w-4" />
-                Connect Wallet
+                {/* The full label overflows the 390px header next to the sync
+                    badge and sign-in button; keep it short in compact mode. */}
+                {compact ? (
+                  <>
+                    <span className="sm:hidden">Connect</span>
+                    <span className="hidden sm:inline">Connect Wallet</span>
+                  </>
+                ) : (
+                  "Connect Wallet"
+                )}
               </>
             )}
           </Button>

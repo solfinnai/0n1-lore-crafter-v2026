@@ -1,32 +1,52 @@
 import { NextRequest, NextResponse } from "next/server"
+import { getAddress } from 'ethers'
 import { checkOwnershipRateLimit, createRateLimitResponse } from '@/lib/rate-limit'
 import { COLLECTIONS, CollectionKey } from '@/lib/collection-config'
-import { withOptionalAuth, getRequestWalletAddress } from '@/lib/auth-middleware'
+import { getRequestUser } from '@/lib/supabase-server'
 import { isDevMode } from '@/lib/auth'
 import { isDemoWallet, isSampleModeEnabled } from '@/lib/dev-mode'
 import { isSampleToken } from '@/lib/sample-token'
 
 const OPENSEA_API_KEY = process.env.OPENSEA_API_KEY
 
-export const GET = withOptionalAuth(async (request: NextRequest, sessionInfo) => {
-  // Get wallet address from authentication (secure) or legacy parameter (backward compatibility)
-  const walletAddress = await getRequestWalletAddress(request, sessionInfo)
+// Phase 2: authentication comes from a Supabase session (Bearer JWT), never
+// from the old custom JWT stack. The ?address= param is NOT an identity — it
+// is just the public on-chain address whose ownership is being looked up
+// (current-owner data is public on OpenSea), so it grants nothing sensitive.
+export async function GET(request: NextRequest) {
+  const auth = await getRequestUser(request)
+  const isAuthenticated = auth !== null
+
   const { searchParams } = new URL(request.url)
+  const addressParam = searchParams.get("address") || searchParams.get("walletAddress")
+  const walletAddress = addressParam ? addressParam.toLowerCase() : null
   const tokenId = searchParams.get("tokenId")
 
   // Input validation
   if (!walletAddress || !tokenId) {
     return NextResponse.json(
-      { 
-        error: !walletAddress ? "Authentication required or address parameter missing" : "TokenId parameter is required",
-        message: !walletAddress ? "Please authenticate with your wallet or provide a valid address parameter" : "TokenId is required for ownership verification",
-        authenticationUrl: !walletAddress ? '/api/auth/challenge' : undefined
-      }, 
+      {
+        error: !walletAddress ? "Address parameter is required" : "TokenId parameter is required",
+        message: !walletAddress ? "Provide the wallet address to check ownership for" : "TokenId is required for ownership verification"
+      },
       { status: 400 }
     )
   }
 
-  console.log(`🔐 Ownership verification - Authentication status: ${sessionInfo.isAuthenticated ? 'AUTHENTICATED' : 'LEGACY_MODE'}`)
+  // Validate the wallet is a well-formed EOA address and the token id is a
+  // plain numeric string BEFORE any external fetch (and before the demo/rate
+  // -limit branches). getAddress() throws on non-EOA input, blocking
+  // path/parameter injection into the outbound OpenSea URLs.
+  try {
+    getAddress(walletAddress)
+  } catch {
+    return NextResponse.json({ error: "Invalid Ethereum address format" }, { status: 400 })
+  }
+  if (!/^\d+$/.test(tokenId)) {
+    return NextResponse.json({ error: "Invalid token ID format" }, { status: 400 })
+  }
+
+  console.log(`🔐 Ownership verification - Authentication status: ${isAuthenticated ? 'AUTHENTICATED' : 'ANONYMOUS'}`)
   console.log(`🔍 Verifying ownership for wallet: ${walletAddress}, tokenId: ${tokenId}`)
 
   // Demo wallet: in dev mode it owns everything (full local testing); in
@@ -43,7 +63,7 @@ export const GET = withOptionalAuth(async (request: NextRequest, sessionInfo) =>
       ownsForce: owns,
       ownsFrame: false,
       method: isDevMode() ? 'dev-mode' : 'sample-mode',
-      authenticated: sessionInfo.isAuthenticated
+      authenticated: isAuthenticated
     })
   }
 
@@ -61,22 +81,6 @@ export const GET = withOptionalAuth(async (request: NextRequest, sessionInfo) =>
           'Retry-After': Math.ceil((rateLimitResult.resetTime - Date.now()) / 1000).toString()
         }
       }
-    )
-  }
-
-  // Validate Ethereum address format
-  if (!/^0x[a-fA-F0-9]{40}$/i.test(walletAddress)) {
-    return NextResponse.json(
-      { error: "Invalid Ethereum address format" }, 
-      { status: 400 }
-    )
-  }
-
-  // Validate token ID format
-  if (!/^\d+$/.test(tokenId)) {
-    return NextResponse.json(
-      { error: "Invalid token ID format" }, 
-      { status: 400 }
     )
   }
 
@@ -105,11 +109,11 @@ export const GET = withOptionalAuth(async (request: NextRequest, sessionInfo) =>
       ownsForce,
       ownsFrame,
       method: "opensea",
-      authenticated: sessionInfo.isAuthenticated
+      authenticated: isAuthenticated
     }, {
       headers: {
         'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600', // Cache for 5 minutes
-        'X-Authenticated': sessionInfo.isAuthenticated.toString()
+        'X-Authenticated': isAuthenticated.toString()
       },
     })
   } catch (error) {
@@ -119,14 +123,14 @@ export const GET = withOptionalAuth(async (request: NextRequest, sessionInfo) =>
       { status: 500 }
     )
   }
-})
+}
 
 async function checkOwnershipViaOpenSea(address: string, tokenId: string, collection: CollectionKey): Promise<boolean> {
   const normalizedTokenId = tokenId.replace(/^0+/, "")
   const contractAddress = COLLECTIONS[collection].contractAddress
   
   // Check if this specific NFT is owned by the address
-  const url = `https://api.opensea.io/api/v2/chain/ethereum/contract/${contractAddress}/nfts/${normalizedTokenId}`
+  const url = `https://api.opensea.io/api/v2/chain/ethereum/contract/${encodeURIComponent(contractAddress)}/nfts/${encodeURIComponent(normalizedTokenId)}`
   
   console.log(`Verifying ${COLLECTIONS[collection].displayName} ownership: ${address} owns NFT #${normalizedTokenId}`)
   

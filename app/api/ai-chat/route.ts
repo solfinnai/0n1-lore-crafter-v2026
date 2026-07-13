@@ -9,9 +9,13 @@ import {
   checkSampleDailyLimit,
   createSampleLimitResponse,
   resolveWalletFromBody,
+  resolveUsageKey,
+  estimateTokensFromText,
+  MAX_CHAT_MESSAGE_CHARS,
   DAILY_LIMITS,
 } from '@/lib/rate-limit'
 import { isDemoWallet } from '@/lib/dev-mode'
+import { getRequestUser } from '@/lib/supabase-server'
 import { claudeComplete, isClaudeConfigured } from '@/lib/ai/claude'
 import { llamaComplete, isLlamaConfigured } from '@/lib/ai/llama'
 import { buildSharedCanonContext } from '@/lib/ai/shared-canon-context'
@@ -74,9 +78,9 @@ export async function POST(request: NextRequest) {
 
     // Check if this is a character creation chat request (simpler format)
     if (body.characterData && body.currentStep && !body.memoryProfile) {
-      return handleCharacterCreationChat(body as CharacterCreationChatRequest)
+      return handleCharacterCreationChat(body as CharacterCreationChatRequest, request)
     }
-    
+
     // Otherwise handle as regular chat request
     const { message, nftId, memoryProfile, enhancedPersonality = false, responseStyle = "dialogue" }: ChatRequest = body
 
@@ -87,30 +91,22 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Check daily usage limits per wallet if wallet address is available
-    // (never the shared demo wallet - sample sessions are capped per-IP above)
-    const walletAddress = resolvedWallet || memoryProfile.metadata?.walletAddress
-    if (walletAddress && !isDemoWallet(walletAddress)) {
-      const estimatedTokens = Math.ceil((message.length + 500) / 4)
-      const dailyUsageResult = checkAndRecordDailyUsage(walletAddress, 'ai_messages', estimatedTokens)
-      if (!dailyUsageResult.allowed) {
-        return NextResponse.json(
-          createDailyLimitResponse(dailyUsageResult.remaining, dailyUsageResult.resetTime, "AI chat"),
-          {
-            status: 429,
-            headers: {
-              'X-Daily-Limit-AI-Messages': String(DAILY_LIMITS.ai_messages),
-              'X-Daily-Limit-Summaries': String(DAILY_LIMITS.summaries),
-              'X-Daily-Limit-Tokens': String(DAILY_LIMITS.total_tokens),
-              'X-Daily-Remaining-AI-Messages': dailyUsageResult.remaining.aiMessages.toString(),
-              'X-Daily-Remaining-Summaries': dailyUsageResult.remaining.summaries.toString(),
-              'X-Daily-Remaining-Tokens': dailyUsageResult.remaining.totalTokens.toString(),
-              'X-Daily-Reset': new Date(dailyUsageResult.resetTime).toISOString()
-            }
-          }
-        )
-      }
+    // Reject oversized single turns before assembling the prompt or spending tokens.
+    if (typeof message !== 'string' || message.length > MAX_CHAT_MESSAGE_CHARS) {
+      return NextResponse.json({ error: 'Message too long' }, { status: 400 })
     }
+
+    // Resolve the daily-usage identity. A valid Supabase session takes precedence
+    // (the user's id is the bucket key, so limits follow the account, not a
+    // self-asserted wallet); logged-out owners bucket by wallet; anonymous
+    // callers fall back to a trusted-IP bucket so they are STILL metered.
+    // The shared demo wallet is excluded here - sample sessions are capped
+    // per-IP above; pooling them into one wallet bucket would lock all sample
+    // users out together.
+    const auth = await getRequestUser(request)
+    const walletAddress = resolvedWallet || memoryProfile.metadata?.walletAddress
+    const usageKey = resolveUsageKey(request, auth?.user.id, walletAddress)
+    const shouldMeter = !isDemoWallet(usageKey)
 
     // All character chat runs on Llama (uncensored, personality-true); creation
     // and lore work stay on Claude. Falls back to Claude if Llama isn't configured.
@@ -131,13 +127,37 @@ export async function POST(request: NextRequest) {
       prompt += buildUnhingedLayer(memoryProfile)
     }
 
+    // Meter the daily cap AFTER assembling the prompt, charging tokens estimated
+    // from the ACTUAL assembled prompt text (system context + user turn).
+    if (shouldMeter) {
+      const estimatedTokens = estimateTokensFromText(prompt, message)
+      const dailyUsageResult = checkAndRecordDailyUsage(usageKey, 'ai_messages', estimatedTokens)
+      if (!dailyUsageResult.allowed) {
+        return NextResponse.json(
+          createDailyLimitResponse(dailyUsageResult.remaining, dailyUsageResult.resetTime, "AI chat"),
+          {
+            status: 429,
+            headers: {
+              'X-Daily-Limit-AI-Messages': String(DAILY_LIMITS.ai_messages),
+              'X-Daily-Limit-Summaries': String(DAILY_LIMITS.summaries),
+              'X-Daily-Limit-Tokens': String(DAILY_LIMITS.total_tokens),
+              'X-Daily-Remaining-AI-Messages': dailyUsageResult.remaining.aiMessages.toString(),
+              'X-Daily-Remaining-Summaries': dailyUsageResult.remaining.summaries.toString(),
+              'X-Daily-Remaining-Tokens': dailyUsageResult.remaining.totalTokens.toString(),
+              'X-Daily-Reset': new Date(dailyUsageResult.resetTime).toISOString()
+            }
+          }
+        )
+      }
+    }
+
     const response = await getAIResponse(message, prompt, enhancedPersonality, responseStyle, useLlama, modelParams)
 
     // Return successful response with usage information
     const responseHeaders: Record<string, string> = {}
-    if (walletAddress) {
+    if (shouldMeter) {
       // Get updated usage info after processing (don't increment again, just get current state)
-      const currentUsage = getDailyUsage(walletAddress)
+      const currentUsage = getDailyUsage(usageKey)
       if (currentUsage.allowed) { // Only add headers if we haven't hit limits
         responseHeaders['X-Daily-Remaining-AI-Messages'] = currentUsage.remaining.aiMessages.toString()
         responseHeaders['X-Daily-Remaining-Summaries'] = currentUsage.remaining.summaries.toString()
@@ -602,12 +622,20 @@ Within the constraints of the response format above, express your personality au
 }
 
 // Handler for character creation chat (simpler version without full memory context)
-async function handleCharacterCreationChat(request: CharacterCreationChatRequest): Promise<NextResponse> {
-  const { message, characterData, currentStep, subStep, messages } = request
-  
+async function handleCharacterCreationChat(
+  body: CharacterCreationChatRequest,
+  request: NextRequest,
+): Promise<NextResponse> {
+  const { message, characterData, currentStep, subStep, messages } = body
+
   try {
     if (!isClaudeConfigured()) {
       throw new Error('Claude API key not configured. Set ANTHROPIC_API_KEY in .env.local.')
+    }
+
+    // Reject oversized single turns before assembling the prompt.
+    if (typeof message !== 'string' || message.length > MAX_CHAT_MESSAGE_CHARS) {
+      return NextResponse.json({ error: 'Message too long' }, { status: 400 })
     }
 
     // Build context for character creation with full Enclave + trait guardrails
@@ -631,6 +659,33 @@ Character Details So Far:`
     })
 
     context += `\n\nHelp the user develop their character for the "${currentStep}" step. Be creative, helpful, and stay within The Enclave / 0N1 Force canon.`
+
+    // Meter this Claude call the same way the main path does: prefer the
+    // authenticated user's id, else a trusted-IP bucket, so anonymous callers
+    // can't use creation chat as an unmetered Opus proxy.
+    const auth = await getRequestUser(request)
+    const usageKey = resolveUsageKey(request, auth?.user.id, null)
+    if (!isDemoWallet(usageKey)) {
+      const estimatedTokens = estimateTokensFromText(context, message)
+      const dailyUsageResult = checkAndRecordDailyUsage(usageKey, 'ai_messages', estimatedTokens)
+      if (!dailyUsageResult.allowed) {
+        return NextResponse.json(
+          createDailyLimitResponse(dailyUsageResult.remaining, dailyUsageResult.resetTime, "AI chat"),
+          {
+            status: 429,
+            headers: {
+              'X-Daily-Limit-AI-Messages': String(DAILY_LIMITS.ai_messages),
+              'X-Daily-Limit-Summaries': String(DAILY_LIMITS.summaries),
+              'X-Daily-Limit-Tokens': String(DAILY_LIMITS.total_tokens),
+              'X-Daily-Remaining-AI-Messages': dailyUsageResult.remaining.aiMessages.toString(),
+              'X-Daily-Remaining-Summaries': dailyUsageResult.remaining.summaries.toString(),
+              'X-Daily-Remaining-Tokens': dailyUsageResult.remaining.totalTokens.toString(),
+              'X-Daily-Reset': new Date(dailyUsageResult.resetTime).toISOString()
+            }
+          }
+        )
+      }
+    }
 
     const response = await claudeComplete({
       system: context,

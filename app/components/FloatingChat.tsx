@@ -20,6 +20,7 @@ import Image from "next/image"
 import type { StoredSoul } from "@/lib/storage-wrapper"
 import type { CharacterMemoryProfile } from "@/lib/memory-types"
 import { useWallet } from "@/components/wallet/wallet-provider"
+import { authHeaders } from "@/lib/auth-headers"
 import { UsageIndicator } from "@/components/ui/usage-indicator"
 import { ErrorMessage } from "@/components/ui/error-message"
 import { useUsageTracking } from "@/hooks/use-usage-tracking"
@@ -123,6 +124,7 @@ export function FloatingChat({ soul, memoryProfile, onClose, onUpdateMemory }: F
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(await authHeaders()),
         },
         body: JSON.stringify({
           message: userMessage.content,
