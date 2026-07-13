@@ -25,6 +25,8 @@ import { Input } from "@/components/ui/input"
 import { getCharacterMemories } from "@/lib/memory"
 import { generatePreviewText, getPreviewTextColor } from "@/lib/preview-text-generator"
 import { useWallet } from "@/components/wallet/wallet-provider"
+import { CanonExportDialog } from "@/components/canon-export-dialog"
+import type { CharacterData } from "@/lib/types"
 
 export default function SoulsPage() {
   const router = useRouter()
@@ -35,6 +37,7 @@ export default function SoulsPage() {
   const [editingSoul, setEditingSoul] = useState<StoredSoul | null>(null)
   const [searchTerm, setSearchTerm] = useState("")
   const [deployedSouls, setDeployedSouls] = useState<Set<string>>(new Set())
+  const [exportingSoul, setExportingSoul] = useState<CharacterData | null>(null)
 
   useEffect(() => {
     const loadSoulsAndNfts = async () => {
@@ -109,14 +112,7 @@ export default function SoulsPage() {
   }
 
   const handleExport = (soul: StoredSoul) => {
-    const dataStr = JSON.stringify(soul.data, null, 2)
-    const dataUri = `data:application/json;charset=utf-8,${encodeURIComponent(dataStr)}`
-    const exportFileDefaultName = `${soul.data.soulName || "soul"}_${soul.data.pfpId}.json`
-
-    const linkElement = document.createElement("a")
-    linkElement.setAttribute("href", dataUri)
-    linkElement.setAttribute("download", exportFileDefaultName)
-    linkElement.click()
+    setExportingSoul(soul.data)
   }
 
   const handleDeployAgent = (soul: StoredSoul) => {
@@ -419,6 +415,12 @@ export default function SoulsPage() {
           </>
         )}
       </div>
+
+      <CanonExportDialog
+        open={!!exportingSoul}
+        onOpenChange={(o) => !o && setExportingSoul(null)}
+        characterData={exportingSoul}
+      />
     </div>
   )
 }
