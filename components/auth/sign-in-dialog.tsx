@@ -243,7 +243,7 @@ export function SignInButton() {
         size="sm"
         onClick={() => setOpen(true)}
         className="h-8 px-2 border-purple-500/50 text-purple-300 hover:bg-purple-900/30"
-        title={user ? `Account: ${describeUser(user)}` : "Sign in to sync your souls"}
+        title={user ? `Account: ${describeUser(user)}` : "Sign in or create an account to sync your souls"}
       >
         <UserCircle className="h-4 w-4" />
         <span className="hidden sm:inline sm:ml-2 max-w-[10rem] truncate">
@@ -346,10 +346,11 @@ export function SignInButton() {
           ) : (
             <>
               <DialogHeader>
-                <DialogTitle>Sign in</DialogTitle>
+                <DialogTitle>Sign in or create an account</DialogTitle>
                 <DialogDescription>
-                  Sync your souls across devices. Everything also stays saved in this browser,
-                  signed in or not.
+                  New here? Just enter your email — we&apos;ll create your account automatically,
+                  no password needed. Signing in syncs your souls across devices; everything also
+                  stays saved in this browser, signed in or not.
                 </DialogDescription>
               </DialogHeader>
               <form
