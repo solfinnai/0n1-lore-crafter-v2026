@@ -129,6 +129,13 @@ export interface CharacterData {
   pfpId: string
   traits: Trait[]
   imageUrl?: string // Add imageUrl to store the NFT image
+  /**
+   * True only when traits came from OpenSea or the pinned sample token.
+   * False/undefined = unverified — wizard must not advance; canon export hard-blocks.
+   */
+  traitsVerified?: boolean
+  /** Provenance of traits for audits / export subject. */
+  traitsSource?: "opensea" | "sample" | "unverified"
   archetype: string
   background: string
   hopesFears: {

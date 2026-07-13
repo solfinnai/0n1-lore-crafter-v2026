@@ -1,0 +1,12 @@
+{
+  "name": "0n1-canon",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Portable 0N1 Force lore repository — worldbible-2026-02 seed",
+  "scripts": {
+    "validate": "node scripts/validate.mjs",
+    "codegen:crafter": "node scripts/codegen-crafter.mjs",
+    "diff:harper": "node scripts/diff-harper.mjs",
+    "verify:submissions": "node scripts/verify-submissions.mjs"
+  }
+}

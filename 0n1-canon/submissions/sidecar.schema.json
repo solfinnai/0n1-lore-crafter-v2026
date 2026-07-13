@@ -1,0 +1,5 @@
+{
+  "schema": "0n1.soul-submission-sidecar",
+  "note": "Review queue state lives here or in PR labels — never inside the signed envelope",
+  "fields": ["submissionId", "status", "reviewer", "reviewedAt", "notes"]
+}

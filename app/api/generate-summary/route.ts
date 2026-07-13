@@ -4,10 +4,13 @@ import type { CharacterMemoryProfile } from "@/lib/memory-types"
 import {
   checkChatRateLimit,
   createRateLimitResponse,
-  checkDailyUsage,
+  checkAndRecordDailyUsage,
+  getDailyUsage,
+  DAILY_LIMITS,
   createDailyLimitResponse
 } from '@/lib/rate-limit'
 import { claudeComplete, isClaudeConfigured } from '@/lib/ai/claude'
+import { buildSharedCanonContext } from '@/lib/ai/shared-canon-context'
 
 export async function POST(request: NextRequest) {
   try {
@@ -51,16 +54,16 @@ export async function POST(request: NextRequest) {
       // Summary generation is a specific operation, track as summaries not ai_messages
       const estimatedTokens = Math.ceil(200 / 4) // Estimated tokens for summary generation
       
-      const dailyUsageResult = checkDailyUsage(walletAddress, 'summaries', estimatedTokens)
+      const dailyUsageResult = checkAndRecordDailyUsage(walletAddress, 'summaries', estimatedTokens)
       if (!dailyUsageResult.allowed) {
         return NextResponse.json(
           createDailyLimitResponse(dailyUsageResult.remaining, dailyUsageResult.resetTime, "summary generation"),
           { 
             status: 429,
             headers: {
-              'X-Daily-Limit-AI-Messages': '20',
-              'X-Daily-Limit-Summaries': '5',
-              'X-Daily-Limit-Tokens': '50000',
+              'X-Daily-Limit-AI-Messages': String(DAILY_LIMITS.ai_messages),
+              'X-Daily-Limit-Summaries': String(DAILY_LIMITS.summaries),
+              'X-Daily-Limit-Tokens': String(DAILY_LIMITS.total_tokens),
               'X-Daily-Remaining-AI-Messages': dailyUsageResult.remaining.aiMessages.toString(),
               'X-Daily-Remaining-Summaries': dailyUsageResult.remaining.summaries.toString(),
               'X-Daily-Remaining-Tokens': dailyUsageResult.remaining.totalTokens.toString(),
@@ -71,11 +74,11 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Build context for the summary
+    // Build context for the summary — classified traits, not raw dump
     let contextText = `Character: ${characterData.soulName} (0N1 Force #${characterData.pfpId})
 Archetype: ${characterData.archetype}
 Background: ${characterData.background}
-Original Traits: ${characterData.traits.map(t => `${t.trait_type}: ${t.value}`).join(', ')}
+${buildSharedCanonContext(characterData, { concisePowers: true, includeWorld: true })}
 `
 
     if (memoryProfile) {
@@ -101,7 +104,7 @@ ${contextText}
 Write exactly 100 words or less. Make it engaging and narrative-focused.`
 
     const summary = (await claudeComplete({
-      system: "You are a skilled storyteller and character analyst. Write compelling, concise character summaries that capture the essence of a character's journey and current state.",
+      system: "You are a skilled storyteller and character analyst for the 0N1 Force Enclave canon. Write compelling, concise character summaries. Never invent masks for Face: Void, never treat Background colors as lineages, never use Neo-Tokyo / Great Merge / Soul-Code lore, and never invent powers outside the provided kit.",
       messages: [{ role: "user", content: prompt }],
       maxTokens: 150,
     })).trim()
@@ -114,7 +117,7 @@ Write exactly 100 words or less. Make it engaging and narrative-focused.`
     const responseHeaders: Record<string, string> = {}
     if (walletAddress) {
       // Get updated usage info after processing (don't increment again, just get current state)
-      const currentUsage = checkDailyUsage(walletAddress, 'summaries', 0)
+      const currentUsage = getDailyUsage(walletAddress)
       if (currentUsage.allowed) {
         responseHeaders['X-Daily-Remaining-AI-Messages'] = currentUsage.remaining.aiMessages.toString()
         responseHeaders['X-Daily-Remaining-Summaries'] = currentUsage.remaining.summaries.toString()

@@ -1,0 +1,15 @@
+{
+  "canonVersion": "worldbible-2026-02",
+  "generatedAt": "2026-07-13T02:39:13.255Z",
+  "files": {
+    "accessories.ts": "1d91bb9b334d847b09af11c9759fc30bbfa8839d5858db9c198f4546c933b89b",
+    "body-types.ts": "21b364d9587f37857c382cfae230552a0a27f14c3243ded2375d625350233931",
+    "face-masks.ts": "bb7cf9f4a5ffe329f50c2d0c3b88fb9932f1a41ac8dfba221402905656a34997",
+    "index.ts": "d6542f6c2e4118c522ec04ec16a4097051501aff18610abca1523d50526640a9",
+    "match.ts": "fbfd849125b3b72b7da5bb38d1299d8c93e5b0f29a1da8fa437947689e620cb4",
+    "meta-traits.ts": "b5f777475b6c0ce0bb1eb5c50ba7952685b5e79db22e1bea0d47d4c5347ed2a4",
+    "selection-rules.ts": "bae7e6145a30b5c0f0a27b62cb22e73386c09489a5e70bed12ecd97875839741",
+    "types.ts": "89308c30df37ae3127a93557d85aa7d041ab1db8b6905f7c7f775979fe58c046",
+    "world.ts": "112f764459a6934471673b316adb9a8be933a2000f47f555688f8bf05b835f50"
+  }
+}

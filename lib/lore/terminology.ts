@@ -1,12 +1,11 @@
+/** @deprecated Prefer glossary from lib/lore/canon/world.ts */
 export const terminology: Record<string, string> = {
-  "Soul-Code": "The unique digital signature that defines an 0N1's identity",
-  "The Merge": "Historical event when digital and physical realities began to overlap",
-  "Blazing Protocol": "Ancient digital rituals that maintain cosmic balance",
-  "Ghost-Hacking": "The art of manipulating one's own or others' digital consciousness",
-  "Quantum Fold": "A hidden pocket of reality where digital and spiritual energies converge",
-  "Neon Shrine": "Personal altars where individuals connect to their digital ancestors",
-  "Code Monks": "Spiritual technologists who maintain the sacred algorithms",
-  "Digital Yokai": "Spirits that have manifested in the digital realm",
-  "Soul Diving": "The practice of entering another's digital consciousness",
-  "Cipher Trance": "Meditative state allowing communion with the digital realm",
+  "One Source": "The primordial energy that sustains The Enclave and grants abilities",
+  "The Enclave": "Pocket-dimension mega-city under The Veil",
+  "The Veil": "Barrier separating The Enclave from The Glitch",
+  "Gen3sis Tree": "Physical manifestation of the One Source beneath the city",
+  "F4LL3N": "Chaos-aligned army seeking to seize the Gen3sis Tree",
+  "World-Electric": "Energy from subterranean turbines powering The Enclave",
+  MORIA: "World Mother AI believed to control self-replicating city systems",
+  "The Glitch": "Corrupted wasteland outside The Enclave; none who enter return",
 }

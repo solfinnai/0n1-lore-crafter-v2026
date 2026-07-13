@@ -317,11 +317,13 @@ function PanelBody({ tokenId, imageUrl, traits }: { tokenId: string | null; imag
       {/* Classified traits */}
       {displayTraits.length > 0 && !isLoading && <TraitMeanings traits={displayTraits} />}
 
-      {/* Footer: fallback warning + OpenSea link in thumb reach */}
-      {!hasProvidedTraits && !isApiData && displayTraits.length > 0 && (
+      {/* Footer: fail-closed notice + OpenSea link */}
+      {!hasProvidedTraits && !isApiData && (
         <div className="text-xs text-amber-400 flex items-start gap-2">
           <AlertTriangle className="h-3 w-3 flex-shrink-0 mt-0.5" />
-          <span>Showing placeholder data - OpenSea may be temporarily unavailable, so these may not be your NFT's real traits.</span>
+          <span>
+            Traits could not be verified from OpenSea. No invented traits are shown — retry later or use sample token #922.
+          </span>
         </div>
       )}
       {openSeaLink && (

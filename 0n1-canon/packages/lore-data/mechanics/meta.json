@@ -1,0 +1,10 @@
+{
+  "canonVersion": "worldbible-2026-02",
+  "soulsVersion": "0.0.0",
+  "schemaVersion": "1.0.0",
+  "mechanicsSource": "crafter-embedded-lib-lore-canon",
+  "narrativeSource": "universe-report-via-world.ts",
+  "collections": ["collection.eth"],
+  "seededFrom": "0n1-lore-crafter/lib/lore/canon",
+  "notes": "Snapshot zero: crafter-canon-first. Harper fold-in is canonVersion #2 after golden parity."
+}

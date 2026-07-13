@@ -1,0 +1,23 @@
+{
+  "generatedAt": "2026-07-13T02:39:55.788Z",
+  "baseCanonVersion": "worldbible-2026-02",
+  "target": "harper-v2",
+  "body": {
+    "both": [],
+    "onlyHarper": [],
+    "onlyCrafter": [
+      "Water",
+      "Type-01",
+      "Tiger Skin",
+      "Pearlescent",
+      "Obsidian",
+      "Kabuki",
+      "Jasper",
+      "Citrine",
+      "Azurite",
+      "Ash"
+    ]
+  },
+  "adjudicationRequired": 10,
+  "incompleteFlagsRecommended": true
+}

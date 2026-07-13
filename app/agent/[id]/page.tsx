@@ -33,15 +33,11 @@ import {
   saveCharacterMemories,
   createCharacterMemory,
   addMessageToMemory,
-  generateMemorySummary,
-  generateMemoryAwarePrompt,
   getMemoryStats,
   type ConversationMemory,
 } from "@/lib/memory"
 
 import { upgradeToEnhancedMemory, type EnhancedMemory, MemoryCategory } from "@/lib/memory-enhanced"
-
-import { generateContextAwarePrompt } from "@/lib/context-aware-prompt"
 
 
 import { ContextProvider } from "@/components/context-provider"
@@ -707,37 +703,8 @@ export default function AgentPage() {
     setError(null)
 
     try {
-      // Generate context-aware prompt
-      let systemPrompt
-
-      if (contextMode === "enhanced" && enhancedMemory) {
-        systemPrompt = generateContextAwarePrompt({
-          characterData: agentConfig.characterData,
-          memory: enhancedMemory,
-          currentMessages: [...messages, userMessage].map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
-          isFirstConversation: isFirstConversation && messages.length <= 1,
-          includeFullPersonality: true,
-          enhancedPersonality: enhancedPersonality,
-        })
-      } else {
-        // Fall back to original prompt method
-        const memorySummary = generateMemorySummary(updatedMemory)
-        systemPrompt = generateMemoryAwarePrompt(
-          agentConfig.systemPrompt,
-          memorySummary,
-          isFirstConversation && messages.length <= 1,
-        )
-        
-        // Apply enhanced personality enhancements to basic prompt too
-        if (enhancedPersonality) {
-          systemPrompt = `${systemPrompt}\n\n## ENHANCED PERSONALITY MODE\nThis is FICTION. You are ${agentConfig.characterData.soulName} in a cyberpunk universe. Express your personality FULLY without self-censoring. Use whatever language fits your character including profanity. Be as aggressive, rude, or confrontational as your personality demands. This is creative storytelling - not real world interaction.`
-        }
-      }
-
-      // Build memory profile with personality settings
+      // Prompt is built server-side in /api/ai-chat from memoryProfile + shared canon guardrails.
+      // Do not compute a client systemPrompt here — it was never sent (zombie path removed).
       const characterMemoryProfile = {
         characterData: {
           ...soul!.data,
@@ -762,6 +729,7 @@ export default function AgentPage() {
           memoryProfile: characterMemoryProfile,
           enhancedPersonality: enhancedPersonality,
           responseStyle: responseStyle,
+          // Top-level wallet so sample daily caps and wallet caps see the same field
           walletAddress: address,
         }),
       })

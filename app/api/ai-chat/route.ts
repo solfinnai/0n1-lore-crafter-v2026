@@ -3,29 +3,21 @@ import type { CharacterMemoryProfile } from '@/lib/memory-types'
 import {
   checkChatRateLimit,
   createRateLimitResponse,
-  checkDailyUsage,
+  checkAndRecordDailyUsage,
+  getDailyUsage,
   createDailyLimitResponse,
   checkSampleDailyLimit,
-  createSampleLimitResponse
+  createSampleLimitResponse,
+  resolveWalletFromBody,
+  DAILY_LIMITS,
 } from '@/lib/rate-limit'
 import { isDemoWallet } from '@/lib/dev-mode'
 import { claudeComplete, isClaudeConfigured } from '@/lib/ai/claude'
 import { llamaComplete, isLlamaConfigured } from '@/lib/ai/llama'
-import { generatePowerKitContext, hasCanonPowers } from '@/lib/lore/canon/match'
+import { buildSharedCanonContext } from '@/lib/ai/shared-canon-context'
 
 // Unhinged Mode routes to a 70B Llama host, which can be slower than Claude.
 export const maxDuration = 60
-
-// Renders the character's canonical trait-matched powers for chat prompts.
-// Returns an empty string when the soul has no stored traits.
-function buildCanonPowerSection(characterData: any): string {
-  const traits = characterData?.traits
-  if (!Array.isArray(traits) || traits.length === 0 || !hasCanonPowers(traits)) return ''
-  return `
-## YOUR CANONICAL POWERS (matched from your NFT's traits - these are the ONLY powers you have; respect their drawbacks and limits)
-${generatePowerKitContext(traits, { concise: true, chosenPaths: characterData?.powersAbilities?.powers })}
-`
-}
 
 interface ChatRequest {
   message: string
@@ -69,10 +61,11 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json()
 
-    // Sample sessions (shared demo wallet) get a per-IP daily allowance -
-    // bounds anonymous AI spend without per-wallet caps, which would pool all
-    // sample users into one global bucket.
-    if (isDemoWallet(body.walletAddress)) {
+    // Unified wallet: top-level walletAddress OR memoryProfile.metadata.walletAddress
+    const resolvedWallet = resolveWalletFromBody(body)
+
+    // Sample sessions (shared demo wallet) get a per-IP daily allowance
+    if (isDemoWallet(resolvedWallet) || isDemoWallet(body.walletAddress)) {
       const sampleLimit = checkSampleDailyLimit(request)
       if (!sampleLimit.allowed) {
         return NextResponse.json(createSampleLimitResponse(sampleLimit.resetTime), { status: 429 })
@@ -96,21 +89,19 @@ export async function POST(request: NextRequest) {
 
     // Check daily usage limits per wallet if wallet address is available
     // (never the shared demo wallet - sample sessions are capped per-IP above)
-    const walletAddress = memoryProfile.metadata?.walletAddress
+    const walletAddress = resolvedWallet || memoryProfile.metadata?.walletAddress
     if (walletAddress && !isDemoWallet(walletAddress)) {
-      // Estimate token count (rough approximation: 1 token ≈ 4 characters)
-      const estimatedTokens = Math.ceil((message.length + 500) / 4) // Message + expected response
-      
-      const dailyUsageResult = checkDailyUsage(walletAddress, 'ai_messages', estimatedTokens)
+      const estimatedTokens = Math.ceil((message.length + 500) / 4)
+      const dailyUsageResult = checkAndRecordDailyUsage(walletAddress, 'ai_messages', estimatedTokens)
       if (!dailyUsageResult.allowed) {
         return NextResponse.json(
           createDailyLimitResponse(dailyUsageResult.remaining, dailyUsageResult.resetTime, "AI chat"),
-          { 
+          {
             status: 429,
             headers: {
-              'X-Daily-Limit-AI-Messages': '20',
-              'X-Daily-Limit-Summaries': '5', 
-              'X-Daily-Limit-Tokens': '50000',
+              'X-Daily-Limit-AI-Messages': String(DAILY_LIMITS.ai_messages),
+              'X-Daily-Limit-Summaries': String(DAILY_LIMITS.summaries),
+              'X-Daily-Limit-Tokens': String(DAILY_LIMITS.total_tokens),
               'X-Daily-Remaining-AI-Messages': dailyUsageResult.remaining.aiMessages.toString(),
               'X-Daily-Remaining-Summaries': dailyUsageResult.remaining.summaries.toString(),
               'X-Daily-Remaining-Tokens': dailyUsageResult.remaining.totalTokens.toString(),
@@ -146,7 +137,7 @@ export async function POST(request: NextRequest) {
     const responseHeaders: Record<string, string> = {}
     if (walletAddress) {
       // Get updated usage info after processing (don't increment again, just get current state)
-      const currentUsage = checkDailyUsage(walletAddress, 'ai_messages', 0)
+      const currentUsage = getDailyUsage(walletAddress)
       if (currentUsage.allowed) { // Only add headers if we haven't hit limits
         responseHeaders['X-Daily-Remaining-AI-Messages'] = currentUsage.remaining.aiMessages.toString()
         responseHeaders['X-Daily-Remaining-Summaries'] = currentUsage.remaining.summaries.toString()
@@ -202,7 +193,7 @@ function buildContextFromMemory(
 ## CHARACTER ESSENCE
 ${characterData.personalityProfile?.description || 'Complex personality'}
 ${characterData.background ? `\nBackground: ${characterData.background}` : ''}
-${buildCanonPowerSection(characterData)}
+${buildSharedCanonContext(characterData, { concisePowers: true, includeWorld: true })}
 ## PERSONALITY TRAITS`
 
   // Add key personality modifiers based on settings
@@ -449,7 +440,7 @@ You are ${characterData.soulName}, a unique character from the 0N1 Force collect
 **Personality:** ${characterData.personalityProfile?.description || "Unknown"}
 **Speech Style:** ${characterData.voice?.speechStyle || "Unknown"}
 **Background:** ${characterData.background || "Unknown"}
-${buildCanonPowerSection(characterData)}
+${buildSharedCanonContext(characterData, { concisePowers: true, includeWorld: true })}
 ## RELATIONSHIP CONTEXT
 **Relationship Level:** ${overview.relationshipLevel}
 **Total Interactions:** ${overview.totalInteractions}
@@ -489,22 +480,33 @@ You are a fictional character in a cyberpunk anime fantasy universe. Stay true t
 // Simple intent detection (can be enhanced later)
 function detectSimpleUserIntent(message: string, history: any[]): string {
   const lowerMessage = message.toLowerCase()
-  
-  // Detect hostile intent
+
+  // Word-boundary patterns — never match substrings (e.g. "hello" must not hit "hell")
   const hostilePatterns = [
-    'fuck', 'shit', 'damn', 'hell', 'stupid', 'idiot', 'dumb',
-    'hate', 'suck', 'terrible', 'awful', 'worst', 'pathetic'
+    /\bfuck(?:ing|ed|er)?\b/,
+    /\bshit(?:ty|ting)?\b/,
+    /\bdamn(?:ed)?\b/,
+    /\bhell\b/,
+    /\bstupid\b/,
+    /\bidiot\b/,
+    /\bdumb\b/,
+    /\bhate\b/,
+    /\bsuck(?:s|ing)?\b/,
+    /\bterrible\b/,
+    /\bawful\b/,
+    /\bworst\b/,
+    /\bpathetic\b/,
   ]
-  
+
   const trollPatterns = [
     'lol', 'lmao', 'ur mom', 'deez nuts', '69', '420',
     'asdf', 'qwerty', 'test test', 'blah blah'
   ]
-  
-  if (hostilePatterns.some(pattern => lowerMessage.includes(pattern))) {
+
+  if (hostilePatterns.some(pattern => pattern.test(lowerMessage))) {
     return 'hostile'
   }
-  
+
   if (trollPatterns.some(pattern => lowerMessage.includes(pattern))) {
     return 'trolling'
   }
@@ -608,27 +610,27 @@ async function handleCharacterCreationChat(request: CharacterCreationChatRequest
       throw new Error('Claude API key not configured. Set ANTHROPIC_API_KEY in .env.local.')
     }
 
-    // Build a simple context for character creation
-    let context = `You are an AI assistant helping to create a character for the 0N1 Force collection.
+    // Build context for character creation with full Enclave + trait guardrails
+    let context = `You are an AI assistant helping to create a character for the 0N1 Force collection inside The Enclave canon (worldbible-2026-02). Never use Neo-Tokyo, Neo-Digital Age, Great Merge, Soul-Code, or Blazing Protocol.
 
 Current Character Data:
 - Name: ${characterData.soulName || "Not yet named"}
 - Archetype: ${characterData.archetype || "Not yet defined"}
 - Step: ${currentStep}${subStep ? ` - ${subStep}` : ''}
-
+${buildSharedCanonContext(characterData, { concisePowers: true, includeWorld: true })}
 Character Details So Far:`
 
     if (characterData.background) context += `\n- Background: ${characterData.background}`
     if (characterData.personalityProfile) context += `\n- Personality: ${characterData.personalityProfile.description}`
-    if (characterData.hopes) context += `\n- Hopes: ${characterData.hopes}`
-    if (characterData.fears) context += `\n- Fears: ${characterData.fears}`
+    if (characterData.hopesFears?.hopes) context += `\n- Hopes: ${characterData.hopesFears.hopes}`
+    if (characterData.hopesFears?.fears) context += `\n- Fears: ${characterData.hopesFears.fears}`
 
     context += `\n\nConversation History:`
     messages.slice(-3).forEach(msg => {
       context += `\n${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content.substring(0, 100)}${msg.content.length > 100 ? '...' : ''}`
     })
 
-    context += `\n\nHelp the user develop their character for the "${currentStep}" step. Be creative, helpful, and stay within the cyberpunk anime fantasy theme of 0N1 Force.`
+    context += `\n\nHelp the user develop their character for the "${currentStep}" step. Be creative, helpful, and stay within The Enclave / 0N1 Force canon.`
 
     const response = await claudeComplete({
       system: context,

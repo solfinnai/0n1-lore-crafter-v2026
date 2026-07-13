@@ -1,312 +1,373 @@
-// Hybrid storage implementation: localStorage (fast cache) + Supabase (persistence)
+/**
+ * Hybrid storage — localStorage is source of truth; cloud is a mirror.
+ *
+ * Phase 2 rewrite (handoff §7):
+ * - Whole CharacterData as JSONB (`data`), never column-decomposed
+ * - Merge by nft_id (never device-local id)
+ * - LWW via client-clock updated_at / lastUpdated
+ * - Tombstones via deleted_at (no resurrection)
+ * - Dirty-set persisted in localStorage (survives tab close)
+ * - Flush on write + visibilitychange (no interval-only sync)
+ * - Sample / demo wallet NEVER syncs
+ *
+ * Requires migration: supabase/migrations/20260712_phase2_souls_jsonb.sql
+ * and a NEW Supabase project with Auth (auth.uid()). Until env is configured,
+ * this module degrades to pure localStorage.
+ */
 import type { CharacterData } from "./types"
 import { supabase } from "./supabase"
 import { isDemoWallet } from "./dev-mode"
-import * as localStorage from "./storage"
+import { isSampleToken, SAMPLE_TOKEN_ID } from "./sample-token"
+import * as local from "./storage"
 import type { StoredSoul } from "./storage"
 
-// Re-export the StoredSoul type
 export type { StoredSoul }
 
-// Configuration
-const SYNC_INTERVAL = 5 * 60 * 1000 // Sync every 5 minutes
+const DIRTY_KEY = "oni-souls-dirty"
+const TOMBSTONE_KEY = "oni-souls-tombstones"
 const SYNC_KEY = "oni-souls-last-sync"
+const SYNC_STATUS_KEY = "oni-souls-sync-status"
 
-// Track pending syncs
-const pendingSyncs = new Set<string>()
-let syncTimeout: NodeJS.Timeout | null = null
-
-// Current wallet address (set by components)
+let currentUserId: string | null = null
 let currentWalletAddress: string | null = null
+let flushTimer: ReturnType<typeof setTimeout> | null = null
+let syncStatus: "idle" | "syncing" | "error" | "offline" | "local-only" = "local-only"
 
 export function setCurrentWalletAddress(address: string | null) {
   currentWalletAddress = address
 }
 
-// Check if Supabase is available. The shared demo/sample wallet must NEVER
-// sync: thousands of sample visitors would upsert souls under one address and
-// merge each other's data into their browsers.
-function isSupabaseAvailable(): boolean {
-  return supabase !== null && currentWalletAddress !== null && !isDemoWallet(currentWalletAddress)
+export function setCurrentUserId(userId: string | null) {
+  currentUserId = userId
 }
 
-// Get the last sync timestamp
-function getLastSyncTime(): number {
-  if (typeof window === "undefined") return 0
-  const lastSync = window.localStorage.getItem(SYNC_KEY)
-  return lastSync ? parseInt(lastSync, 10) : 0
+export function getSyncStatus() {
+  return syncStatus
 }
 
-// Set the last sync timestamp
-function setLastSyncTime(time: number) {
-  if (typeof window === "undefined") return
-  window.localStorage.setItem(SYNC_KEY, time.toString())
-}
-
-// Transform Supabase data to StoredSoul format
-function transformSupabaseToLocal(row: any): StoredSoul {
-  return {
-    id: row.id,
-    createdAt: row.created_at,
-    lastUpdated: row.updated_at,
-    data: {
-      pfpId: row.nft_id,
-      soulName: row.character_name || '',
-      archetype: row.archetype || '',
-      background: row.background || '',
-      traits: row.traits || [],
-      imageUrl: row.image_url || undefined,
-      ...row.personality_data,
-    }
+function setStatus(s: typeof syncStatus) {
+  syncStatus = s
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(SYNC_STATUS_KEY, s)
   }
 }
 
-// Sync a single soul to Supabase
-async function syncSoulToSupabase(soul: StoredSoul): Promise<boolean> {
-  if (!isSupabaseAvailable() || !supabase) return false
+function cloudEnabled(): boolean {
+  return (
+    supabase !== null &&
+    currentUserId !== null &&
+    !isDemoWallet(currentWalletAddress)
+  )
+}
 
+function readDirty(): Set<string> {
+  if (typeof window === "undefined") return new Set()
   try {
-    const { error } = await supabase
-      .from('character_souls')
-      .upsert({
-        id: soul.id,
-        nft_id: soul.data.pfpId,
-        wallet_address: currentWalletAddress!,
-        character_name: soul.data.soulName,
-        archetype: soul.data.archetype,
-        background: soul.data.background,
-        personality_data: {
-          hopesFears: soul.data.hopesFears,
-          personalityProfile: soul.data.personalityProfile,
-          motivations: soul.data.motivations,
-          relationships: soul.data.relationships,
-          worldPosition: soul.data.worldPosition,
-          voice: soul.data.voice,
-          symbolism: soul.data.symbolism,
-          powersAbilities: soul.data.powersAbilities,
-        },
-        traits: soul.data.traits,
-        image_url: soul.data.imageUrl,
-        created_at: soul.createdAt,
-        updated_at: soul.lastUpdated,
-      })
+    const raw = JSON.parse(window.localStorage.getItem(DIRTY_KEY) || "[]")
+    return new Set(Array.isArray(raw) ? raw.map(String) : [])
+  } catch {
+    return new Set()
+  }
+}
 
-    if (error) {
-      console.error('Error syncing soul to Supabase:', error)
-      return false
-    }
+function writeDirty(set: Set<string>) {
+  if (typeof window === "undefined") return
+  window.localStorage.setItem(DIRTY_KEY, JSON.stringify([...set]))
+}
 
-    return true
-  } catch (error) {
-    console.error('Error in syncSoulToSupabase:', error)
+function markDirty(nftId: string) {
+  const d = readDirty()
+  d.add(String(nftId))
+  writeDirty(d)
+  scheduleFlush()
+}
+
+function readTombstones(): Record<string, string> {
+  if (typeof window === "undefined") return {}
+  try {
+    return JSON.parse(window.localStorage.getItem(TOMBSTONE_KEY) || "{}")
+  } catch {
+    return {}
+  }
+}
+
+function writeTombstones(map: Record<string, string>) {
+  if (typeof window === "undefined") return
+  window.localStorage.setItem(TOMBSTONE_KEY, JSON.stringify(map))
+}
+
+function shouldSkipSoul(soul: StoredSoul): boolean {
+  const nftId = String(soul.data?.pfpId || "")
+  if (isSampleToken(nftId) || nftId === SAMPLE_TOKEN_ID) return true
+  return false
+}
+
+function scheduleFlush() {
+  if (!cloudEnabled()) return
+  if (flushTimer) clearTimeout(flushTimer)
+  flushTimer = setTimeout(() => {
+    flushDirty().catch(console.error)
+  }, 1500)
+}
+
+async function upsertSoul(soul: StoredSoul): Promise<boolean> {
+  if (!cloudEnabled() || !supabase || !currentUserId) return false
+  if (shouldSkipSoul(soul)) return true
+
+  const nftId = String(soul.data.pfpId)
+  const { error } = await supabase.from("souls").upsert(
+    {
+      user_id: currentUserId,
+      nft_id: nftId,
+      local_id: soul.id,
+      data: soul.data,
+      created_at: soul.createdAt,
+      updated_at: soul.lastUpdated,
+      deleted_at: null,
+    },
+    { onConflict: "user_id,nft_id" },
+  )
+
+  if (error) {
+    console.error("souls upsert failed", error)
+    setStatus("error")
     return false
   }
+  return true
 }
 
-// Sync all pending souls to Supabase
-async function syncPendingToSupabase() {
-  if (!isSupabaseAvailable() || pendingSyncs.size === 0) return
+async function tombstoneRemote(nftId: string, deletedAt: string): Promise<boolean> {
+  if (!cloudEnabled() || !supabase || !currentUserId) return false
+  const { error } = await supabase
+    .from("souls")
+    .upsert(
+      {
+        user_id: currentUserId,
+        nft_id: nftId,
+        local_id: `tombstone-${nftId}`,
+        data: {},
+        updated_at: deletedAt,
+        deleted_at: deletedAt,
+      },
+      { onConflict: "user_id,nft_id" },
+    )
+  if (error) {
+    console.error("tombstone failed", error)
+    return false
+  }
+  return true
+}
 
-  console.log(`🔄 Syncing ${pendingSyncs.size} souls to Supabase...`)
+export async function flushDirty(): Promise<void> {
+  if (!cloudEnabled()) {
+    setStatus("local-only")
+    return
+  }
+  setStatus("syncing")
+  const dirty = readDirty()
+  const tombs = readTombstones()
 
-  for (const soulId of pendingSyncs) {
-    const soul = localStorage.getSoulById(soulId)
-    if (soul) {
-      const success = await syncSoulToSupabase(soul)
-      if (success) {
-        pendingSyncs.delete(soulId)
+  for (const nftId of Object.keys(tombs)) {
+    await tombstoneRemote(nftId, tombs[nftId])
+  }
+
+  for (const nftId of dirty) {
+    if (tombs[nftId]) {
+      dirty.delete(nftId)
+      continue
+    }
+    const soul = local.getSoulByNftId(nftId)
+    if (!soul || shouldSkipSoul(soul)) {
+      dirty.delete(nftId)
+      continue
+    }
+    const ok = await upsertSoul(soul)
+    if (ok) dirty.delete(nftId)
+  }
+
+  writeDirty(dirty)
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(SYNC_KEY, String(Date.now()))
+  }
+  setStatus(dirty.size === 0 ? "idle" : "error")
+}
+
+/**
+ * Merge remote rows by nft_id. Newest updated_at wins.
+ * Tombstones beat live rows both directions.
+ */
+export async function mergeFromRemote(): Promise<void> {
+  if (!cloudEnabled() || !supabase || !currentUserId) return
+
+  const { data, error } = await supabase
+    .from("souls")
+    .select("*")
+    .eq("user_id", currentUserId)
+
+  if (error) {
+    console.error("pull souls failed", error)
+    setStatus("error")
+    return
+  }
+
+  const tombs = readTombstones()
+  const localSouls = local.getStoredSouls()
+  const byNft = new Map(localSouls.map((s) => [String(s.data.pfpId), s]))
+
+  for (const row of data || []) {
+    const nftId = String(row.nft_id)
+    if (nftId === SAMPLE_TOKEN_ID) continue
+
+    if (row.deleted_at) {
+      tombs[nftId] = row.deleted_at
+      const existing = byNft.get(nftId)
+      if (existing) {
+        local.deleteSoul(existing.id)
+        byNft.delete(nftId)
       }
+      continue
+    }
+
+    if (tombs[nftId]) {
+      // Local tombstone wins until flushed
+      continue
+    }
+
+    const remoteUpdated = Date.parse(row.updated_at) || 0
+    const localSoul = byNft.get(nftId)
+    const localUpdated = localSoul ? Date.parse(localSoul.lastUpdated) || 0 : 0
+
+    if (!localSoul || remoteUpdated > localUpdated) {
+      const characterData = row.data as CharacterData
+      if (localSoul) {
+        local.updateSoul(localSoul.id, characterData)
+      } else {
+        // storeSoul generates new id — acceptable; merge key is nft_id
+        local.storeSoul(characterData)
+      }
+    } else if (localUpdated > remoteUpdated) {
+      markDirty(nftId)
     }
   }
 
-  setLastSyncTime(Date.now())
-  console.log(`✅ Sync complete. ${pendingSyncs.size} souls remaining in queue.`)
-}
+  writeTombstones(tombs)
 
-// Schedule a sync with debouncing
-function scheduleSyncToSupabase(soulId: string) {
-  pendingSyncs.add(soulId)
-
-  // Clear existing timeout
-  if (syncTimeout) {
-    clearTimeout(syncTimeout)
-  }
-
-  // Schedule new sync after 2 seconds of inactivity
-  syncTimeout = setTimeout(() => {
-    syncPendingToSupabase()
-  }, 2000)
-}
-
-// Pull latest data from Supabase
-async function pullFromSupabase(): Promise<StoredSoul[]> {
-  if (!isSupabaseAvailable() || !supabase) return []
-
-  try {
-    const { data, error } = await supabase
-      .from('character_souls')
-      .select('*')
-      .eq('wallet_address', currentWalletAddress!)
-      .order('updated_at', { ascending: false })
-
-    if (error) {
-      console.error('Error pulling from Supabase:', error)
-      return []
-    }
-
-    return data.map(transformSupabaseToLocal)
-  } catch (error) {
-    console.error('Error in pullFromSupabase:', error)
-    return []
-  }
-}
-
-// Merge Supabase data with local data (Supabase wins on conflicts)
-async function mergeWithSupabase() {
-  if (!isSupabaseAvailable()) return
-
-  const localSouls = localStorage.getStoredSouls()
-  const remoteSouls = await pullFromSupabase()
-
-  // Create a map of remote souls by ID for quick lookup
-  const remoteMap = new Map(remoteSouls.map(soul => [soul.id, soul]))
-
-  // Update local souls with remote data if remote is newer
-  for (const remoteSoul of remoteSouls) {
-    const localSoul = localStorage.getSoulById(remoteSoul.id)
-    
-    if (!localSoul || new Date(remoteSoul.lastUpdated) > new Date(localSoul.lastUpdated)) {
-      // Remote is newer or doesn't exist locally - update local
-      localStorage.updateSoul(remoteSoul.id, remoteSoul.data)
+  // First login: upload local souls not on remote (excluding sample)
+  const remoteNfts = new Set((data || []).map((r: any) => String(r.nft_id)))
+  for (const soul of local.getStoredSouls()) {
+    if (shouldSkipSoul(soul)) continue
+    if (!remoteNfts.has(String(soul.data.pfpId)) && !tombs[String(soul.data.pfpId)]) {
+      markDirty(String(soul.data.pfpId))
     }
   }
 
-  // Sync local souls that don't exist in remote
-  for (const localSoul of localSouls) {
-    if (!remoteMap.has(localSoul.id)) {
-      await syncSoulToSupabase(localSoul)
-    }
-  }
-
-  setLastSyncTime(Date.now())
-  console.log('✅ Merge with Supabase complete')
+  await flushDirty()
 }
 
-// Initialize: merge with Supabase on load
-export async function initializeHybridStorage(walletAddress: string) {
+export async function initializeHybridStorage(walletAddress: string, userId?: string | null) {
   setCurrentWalletAddress(walletAddress)
-  
-  if (isSupabaseAvailable()) {
-    // Check if we need to sync
-    const lastSync = getLastSyncTime()
-    const timeSinceSync = Date.now() - lastSync
-    
-    if (timeSinceSync > SYNC_INTERVAL) {
-      await mergeWithSupabase()
+  if (userId) setCurrentUserId(userId)
+
+  // Auto-detect supabase auth session when available
+  if (supabase && !currentUserId) {
+    try {
+      const { data } = await supabase.auth.getUser()
+      if (data.user?.id) setCurrentUserId(data.user.id)
+    } catch {
+      // no session yet
     }
   }
-}
 
-// Public API (wraps localStorage with Supabase sync)
+  if (!cloudEnabled()) {
+    setStatus("local-only")
+    return
+  }
+
+  await mergeFromRemote()
+}
 
 export function getStoredSouls(): StoredSoul[] {
-  return localStorage.getStoredSouls()
+  return local.getStoredSouls()
 }
 
 export function soulExistsForNft(pfpId: string): boolean {
-  return localStorage.soulExistsForNft(pfpId)
+  return local.soulExistsForNft(pfpId)
 }
 
 export function getSoulByNftId(pfpId: string): StoredSoul | null {
-  return localStorage.getSoulByNftId(pfpId)
+  return local.getSoulByNftId(pfpId)
 }
 
 export function getSoulById(id: string): StoredSoul | null {
-  return localStorage.getSoulById(id)
+  return local.getSoulById(id)
 }
 
 export function storeSoul(characterData: CharacterData): string {
-  // Save to localStorage first (immediate)
-  const soulId = localStorage.storeSoul(characterData)
-  
-  // Schedule sync to Supabase
-  if (isSupabaseAvailable()) {
-    scheduleSyncToSupabase(soulId)
+  const soulId = local.storeSoul(characterData)
+  const nftId = String(characterData.pfpId)
+  if (!shouldSkipSoul({ id: soulId, createdAt: "", lastUpdated: "", data: characterData })) {
+    markDirty(nftId)
   }
-  
   return soulId
 }
 
 export function updateSoul(id: string, characterData: CharacterData): boolean {
-  // Update localStorage first
-  const success = localStorage.updateSoul(id, characterData)
-  
-  if (success && isSupabaseAvailable()) {
-    scheduleSyncToSupabase(id)
-  }
-  
+  const success = local.updateSoul(id, characterData)
+  if (success) markDirty(String(characterData.pfpId))
   return success
 }
 
 export function deleteSoul(id: string): boolean {
-  // Delete from localStorage
-  const success = localStorage.deleteSoul(id)
-  
-  if (success && isSupabaseAvailable() && supabase) {
-    // Delete from Supabase
-    supabase
-      .from('character_souls')
-      .delete()
-      .eq('id', id)
-      .then(({ error }) => {
-        if (error) {
-          console.error('Error deleting from Supabase:', error)
-        }
-      })
+  const soul = local.getSoulById(id)
+  const success = local.deleteSoul(id)
+  if (success && soul) {
+    const nftId = String(soul.data.pfpId)
+    if (!shouldSkipSoul(soul)) {
+      const deletedAt = new Date().toISOString()
+      const tombs = readTombstones()
+      tombs[nftId] = deletedAt
+      writeTombstones(tombs)
+      const dirty = readDirty()
+      dirty.delete(nftId)
+      writeDirty(dirty)
+      scheduleFlush()
+    }
   }
-  
   return success
 }
 
-// Manual sync function (can be called from UI)
 export async function manualSync(): Promise<{
   success: boolean
   synced: number
   errors: string[]
 }> {
-  if (!isSupabaseAvailable()) {
-    return { success: false, synced: 0, errors: ['Supabase not available'] }
-  }
-
-  const errors: string[] = []
-  let synced = 0
-
-  try {
-    // First pull from Supabase
-    await mergeWithSupabase()
-
-    // Then push any pending changes
-    const localSouls = localStorage.getStoredSouls()
-    for (const soul of localSouls) {
-      const success = await syncSoulToSupabase(soul)
-      if (success) {
-        synced++
-      } else {
-        errors.push(`Failed to sync soul ${soul.id}`)
-      }
+  if (!cloudEnabled()) {
+    return {
+      success: false,
+      synced: 0,
+      errors: [
+        "Cloud sync requires Supabase Auth session (Phase 2). Sample mode stays local-only.",
+      ],
     }
-
-    return { success: errors.length === 0, synced, errors }
-  } catch (error) {
-    return { success: false, synced, errors: [`Sync failed: ${error}`] }
+  }
+  try {
+    await mergeFromRemote()
+    const dirty = readDirty()
+    return { success: dirty.size === 0, synced: dirty.size === 0 ? 1 : 0, errors: dirty.size ? ["Some souls still dirty"] : [] }
+  } catch (e) {
+    return { success: false, synced: 0, errors: [`Sync failed: ${e}`] }
   }
 }
 
-// Auto-sync every 5 minutes if the tab is active
-if (typeof window !== 'undefined') {
-  setInterval(() => {
-    if (document.visibilityState === 'visible' && isSupabaseAvailable()) {
-      syncPendingToSupabase()
+if (typeof window !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      flushDirty().catch(console.error)
     }
-  }, SYNC_INTERVAL)
-} 
+  })
+  window.addEventListener("online", () => {
+    setStatus(cloudEnabled() ? "idle" : "local-only")
+    flushDirty().catch(console.error)
+  })
+  window.addEventListener("offline", () => setStatus("offline"))
+}

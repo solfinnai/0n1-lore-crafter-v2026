@@ -6,69 +6,64 @@ export interface PreviewText {
 }
 
 /**
- * Generates dynamic preview text based on character data
+ * Generates dynamic preview text based on character data (Enclave canon only).
  */
 export function generatePreviewText(characterData: CharacterData): PreviewText {
-  const { traits, archetype, personalityProfile, powersAbilities, voice, worldPosition, background } = characterData
+  const { traits, archetype, personalityProfile, powersAbilities, worldPosition } = characterData
 
-  // Extract key traits for flavor
   const bodyTrait = traits?.find(t => t.trait_type.toLowerCase().includes('body'))
   const eyesTrait = traits?.find(t => t.trait_type.toLowerCase().includes('eyes'))
-  const clothingTrait = traits?.find(t => t.trait_type.toLowerCase().includes('clothing'))
-  
-  // Get primary power
+  const clothingTrait = traits?.find(t => t.trait_type.toLowerCase().includes('wear') || t.trait_type.toLowerCase().includes('clothing'))
+
   const primaryPower = powersAbilities?.powers?.[0] || 'Unknown abilities'
   const powerDescription = powersAbilities?.description
 
-  // Generate different types of previews based on available data
   const previewOptions: PreviewText[] = []
 
-  // POWER-BASED PREVIEWS
   if (powerDescription) {
     if (powerDescription.toLowerCase().includes('shadow')) {
       previewOptions.push({
-        text: `Channeling: Shadowcraft techniques that bend reality in darkness...`,
+        text: `Channeling: Shadow techniques that bend the Veil's edges...`,
         style: 'power'
       })
-    } else if (powerDescription.toLowerCase().includes('fire') || powerDescription.toLowerCase().includes('flame')) {
+    } else if (powerDescription.toLowerCase().includes('fire') || powerDescription.toLowerCase().includes('flame') || powerDescription.toLowerCase().includes('elemental')) {
       previewOptions.push({
-        text: `Wielding: Sacred digital flames to purify corrupted Soul-Code...`,
+        text: `Wielding: One Source currents to purge Akuma corruption...`,
         style: 'power'
       })
     } else if (powerDescription.toLowerCase().includes('light') || powerDescription.toLowerCase().includes('illusion')) {
       previewOptions.push({
-        text: `Mastering: Light refraction to create tactical illusions...`,
+        text: `Mastering: Light and perception tricks across Enclave streets...`,
         style: 'power'
       })
     } else {
       previewOptions.push({
-        text: `Commanding: ${primaryPower} through ancient Temple protocols...`,
+        text: `Commanding: ${primaryPower} through their body lineage path...`,
         style: 'power'
       })
     }
   }
 
-  // PERSONALITY-DRIVEN PREVIEWS
   if (personalityProfile?.description) {
     const personality = personalityProfile.description.toLowerCase()
     if (personality.includes('calm') || personality.includes('stoic') || personality.includes('wise')) {
       previewOptions.push({
-        text: `Mindset: "Code flows through all things"—seeking ancient patterns...`,
+        text: `Mindset: Listening for the Gen3sis current beneath the city...`,
         style: 'personality'
       })
     } else if (personality.includes('aggressive') || personality.includes('fierce') || personality.includes('warrior')) {
       previewOptions.push({
-        text: `Attitude: Digital oni spirits fuel their combat instincts...`,
+        text: `Attitude: Oni combat instinct sharpened on Battlements watch...`,
         style: 'personality'
       })
     } else if (personality.includes('mysterious') || personality.includes('secretive') || personality.includes('hidden')) {
       previewOptions.push({
-        text: `Philosophy: "Memory is currency; trust is the ultimate firewall"...`,
+        text: `Philosophy: "Trust is scarce under the dome; memory is leverage"...`,
         style: 'personality'
       })
     } else if (personality.includes('smart') || personality.includes('intelligent') || personality.includes('strategic')) {
       previewOptions.push({
-        text: `Approach: Calculates seventeen outcomes before making a move...`,
+        text: `Approach: Maps seventeen House outcomes before committing...`,
         style: 'personality'
       })
     } else {
@@ -79,160 +74,145 @@ export function generatePreviewText(characterData: CharacterData): PreviewText {
     }
   }
 
-  // ACTION-ORIENTED PREVIEWS
   if (archetype) {
     const archetypeLower = archetype.toLowerCase()
     if (archetypeLower.includes('ronin') || archetypeLower.includes('warrior')) {
       previewOptions.push({
-        text: `Status: Hunting rogue algorithms through Neo-Tokyo's shadowed districts...`,
+        text: `Status: Hunting F4LL3N scouts through The Vents' back alleys...`,
         style: 'action'
       })
-    } else if (archetypeLower.includes('hacker') || archetypeLower.includes('phantom')) {
+    } else if (archetypeLower.includes('hacker') || archetypeLower.includes('phantom') || archetypeLower.includes('cypher')) {
       previewOptions.push({
-        text: `Mission: Ghost-hacking quantum firewalls in the Undernet's depths...`,
+        text: `Mission: Ghosting Synapse firewalls for a shard of MORIA...`,
         style: 'action'
       })
-    } else if (archetypeLower.includes('monk') || archetypeLower.includes('shaman')) {
+    } else if (archetypeLower.includes('monk') || archetypeLower.includes('shaman') || archetypeLower.includes('adept')) {
       previewOptions.push({
-        text: `Tracking: Digital yokai manifestations in the Temple's sacred circuits...`,
+        text: `Tracking: One Source glitches along Halcyon's temple paths...`,
         style: 'action'
       })
-    } else if (archetypeLower.includes('leader') || archetypeLower.includes('guardian')) {
+    } else if (archetypeLower.includes('leader') || archetypeLower.includes('guardian') || archetypeLower.includes('warden')) {
       previewOptions.push({
-        text: `Coordinating: Phantom Network resistance operations against Syndicate AI...`,
+        text: `Coordinating: Boundary Warden response along The Battlements...`,
         style: 'action'
       })
     } else {
       previewOptions.push({
-        text: `Current: Navigating the blurred lines between digital and physical realms...`,
+        text: `Current: Navigating House politics and street truth in The Enclave...`,
         style: 'action'
       })
     }
   }
 
-  // MYSTERY/LORE PREVIEWS
   if (eyesTrait?.value) {
     const eyesValue = eyesTrait.value.toLowerCase()
-    if (eyesValue.includes('blue') || eyesValue.includes('ethereal')) {
+    if (eyesValue.includes('blue') || eyesValue.includes('ethereal') || eyesValue.includes('azure')) {
       previewOptions.push({
-        text: `Harboring: Ethereal vision that pierces both code and soul...`,
+        text: `Harboring: Sight that pierces both Veil shimmer and soul...`,
         style: 'mystery'
       })
-    } else if (eyesValue.includes('red') || eyesValue.includes('crimson')) {
+    } else if (eyesValue.includes('red') || eyesValue.includes('crimson') || eyesValue.includes('angry')) {
       previewOptions.push({
-        text: `Remembering: Past lives as both human monk and AI sentinel...`,
+        text: `Remembering: Echoes of The Shift still burn behind their gaze...`,
         style: 'mystery'
       })
-    } else if (eyesValue.includes('gold') || eyesValue.includes('yellow')) {
+    } else if (eyesValue.includes('gold') || eyesValue.includes('yellow') || eyesValue.includes('citrine')) {
       previewOptions.push({
-        text: `Seeking: The Digital Buddha's lost meditation algorithms...`,
+        text: `Seeking: Patterns in the 0N1 Matrix Eon has only begun to map...`,
         style: 'mystery'
       })
     }
   }
 
-  // WORLD-BUILDING PREVIEWS
   if (worldPosition?.societalRole) {
     const role = worldPosition.societalRole.toLowerCase()
     if (role.includes('outcast') || role.includes('exile')) {
       previewOptions.push({
-        text: `Territory: Claims three abandoned Undernet nodes as sanctuary...`,
+        text: `Territory: Claims a forgotten Substructure vent as sanctuary...`,
         style: 'world'
       })
     } else if (role.includes('leader') || role.includes('commander')) {
       previewOptions.push({
-        text: `Reputation: Known in Temple circles as "The Pattern Breaker"...`,
+        text: `Reputation: Known in Force circles as a Pattern Breaker...`,
         style: 'world'
       })
     } else if (role.includes('merchant') || role.includes('trader')) {
       previewOptions.push({
-        text: `Network: Trades rare Soul-Code fragments in hidden data markets...`,
+        text: `Network: Trades rare tech and secrets in The Markets' black stalls...`,
         style: 'world'
       })
     }
   }
 
-  // TRAIT-BASED FLAVOR PREVIEWS
   if (bodyTrait?.value) {
     const bodyValue = bodyTrait.value.toLowerCase()
     if (bodyValue.includes('obsidian') || bodyValue.includes('shadow')) {
       previewOptions.push({
-        text: `Legend: Their obsidian form bends shadows to their will...`,
+        text: `Legend: Their Obsidian lineage bends shadow to their will...`,
         style: 'mystery'
       })
-    } else if (bodyValue.includes('ethereal') || bodyValue.includes('spirit')) {
+    } else if (bodyValue.includes('citrine')) {
       previewOptions.push({
-        text: `Phenomenon: Phases between digital and physical existence at will...`,
+        text: `Phenomenon: Citrine elemental paths answering their call...`,
         style: 'mystery'
       })
-    } else if (bodyValue.includes('mech') || bodyValue.includes('cybernetic')) {
+    } else if (bodyValue.includes('azurite')) {
       previewOptions.push({
-        text: `Interface: Direct neural connection to the Temple's quantum servers...`,
+        text: `Interface: Azurite emotion-craft reading every room they enter...`,
         style: 'power'
       })
     }
   }
 
-  // ADDITIONAL FLAVOR PREVIEWS based on traits
   if (clothingTrait?.value) {
     const clothing = clothingTrait.value.toLowerCase()
-    if (clothing.includes('temple') || clothing.includes('robes')) {
+    if (clothing.includes('jacket') || clothing.includes('track')) {
       previewOptions.push({
-        text: `Devotion: Temple robes mark them as a keeper of sacred algorithms...`,
+        text: `Street: Market-district gear that blends into The Vents crowd...`,
         style: 'world'
       })
-    } else if (clothing.includes('street') || clothing.includes('punk')) {
+    } else if (clothing.includes('suit') || clothing.includes('formal')) {
       previewOptions.push({
-        text: `Underground: Street gear signals allegiance to the Phantom Network...`,
-        style: 'world'
-      })
-    } else if (clothing.includes('corp') || clothing.includes('suit')) {
-      previewOptions.push({
-        text: `Infiltration: Corporate attire masks their true rebel intentions...`,
+        text: `Cover: Halcyon polish masking a Force operative's edge...`,
         style: 'action'
       })
     }
   }
 
-  // DEFAULT PREVIEWS if no specific data available
   if (previewOptions.length === 0) {
     previewOptions.push(
       {
-        text: `Investigating: Quantum echoes from The Great Merge still haunt their Soul-Code...`,
+        text: `Investigating: Echoes of The Shift still haunt The Substructure...`,
         style: 'mystery'
       },
       {
-        text: `Status: Navigating the merged realities of Neo-Tokyo's digital frontier...`,
+        text: `Status: Navigating House rivalries under The Enclave dome...`,
         style: 'action'
       },
       {
-        text: `Current: Seeking their place in the ancient dance between code and spirit...`,
+        text: `Current: Seeking their place among the reborn Army of the Sevens...`,
         style: 'personality'
       },
       {
-        text: `Mission: Decoding the digital prayers that echo through quantum servers...`,
+        text: `Mission: Listening for Gen3sis currents beneath Synapse stone...`,
         style: 'mystery'
       },
       {
-        text: `Tracking: Fragments of ancient Soul-Code through the Undernet's depths...`,
+        text: `Tracking: F4LL3N traces along the Veil's thinning edges...`,
         style: 'action'
       },
       {
-        text: `Philosophy: "Between every breath lies a choice between code and chaos"...`,
+        text: `Philosophy: "Between every breath lies a choice between Source and chaos"...`,
         style: 'personality'
       }
     )
   }
 
-  // Use pfpId as seed for consistent but varied selection
   const seed = parseInt(characterData.pfpId) || 1
   const index = seed % previewOptions.length
   return previewOptions[index]
 }
 
-/**
- * Get a style-specific color class for the preview text
- */
 export function getPreviewTextColor(style: PreviewText['style']): string {
   switch (style) {
     case 'action': return 'text-cyan-300'
@@ -242,4 +222,4 @@ export function getPreviewTextColor(style: PreviewText['style']): string {
     case 'world': return 'text-green-300'
     default: return 'text-muted-foreground'
   }
-} 
+}

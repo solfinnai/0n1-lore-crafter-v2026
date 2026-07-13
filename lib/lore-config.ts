@@ -1,51 +1,25 @@
+/**
+ * @deprecated Prefer lib/lore/canon/world.ts — kept only so legacy imports compile.
+ * Do not inject this into AI prompts.
+ */
 export const loreConfig = {
   worldSetting: {
-    era: "Neo-Digital Age, year 2157",
-    location: "Neo-Tokyo and the surrounding Digital Frontier",
-    technology: "Blend of advanced cybernetics, holographic interfaces, and digital consciousness transfer",
-    society: "Stratified between digital elites, physical laborers, and the digitally augmented middle class",
-    spirituality: "Revival of ancient traditions merged with digital consciousness theories",
+    era: "Present Day — The Awakening (Nexus Chronology)",
+    location: "The Enclave under The Veil",
   },
-
   factions: [
     {
-      name: "The Blazing Temple",
-      description: "Digital monks who maintain the sacred code that bridges spiritual and digital realms",
-      alignment: "Neutral guardians of balance",
+      name: "The 0N1 Force",
+      description: "Elite protectors of The Enclave under the Council of Masks.",
     },
     {
-      name: "Neon Syndicate",
-      description: "Corporate conglomerate controlling most of the digital infrastructure",
-      alignment: "Antagonistic to individual freedom",
+      name: "The K4M-1 Houses",
+      description: "Seven divine Houses shaped by the God War.",
     },
-    {
-      name: "The Phantom Network",
-      description: "Underground collective of hackers and digital nomads",
-      alignment: "Chaotic freedom fighters",
-    },
-    // Add more factions
   ],
-
   terminology: {
-    "Soul-Code": "The unique digital signature that defines an 0N1's identity",
-    "The Merge": "Historical event when digital and physical realities began to overlap",
-    "Blazing Protocol": "Ancient digital rituals that maintain cosmic balance",
-    "Ghost-Hacking": "The art of manipulating one's own or others' digital consciousness",
-    // Add more terms
-  },
-
-  themes: [
-    "Identity in a world where consciousness can be copied and transferred",
-    "Balance between technological advancement and spiritual tradition",
-    "Freedom versus security in a monitored digital existence",
-    "The nature of reality when digital and physical merge",
-    // Add more themes
-  ],
-
-  storytellingStyle: {
-    tone: "Blend of cyberpunk grit with mystical philosophy",
-    pacing: "Contemplative moments punctuated by intense action",
-    imagery: "Neon-lit cityscapes contrasted with ancient temples and digital voids",
-    dialogue: "Mix of technical jargon, street slang, and philosophical koans",
+    "One Source": "The primordial energy of The Enclave",
+    "The Veil": "Barrier against The Glitch",
+    "Gen3sis Tree": "Physical manifestation of the One Source",
   },
 }
