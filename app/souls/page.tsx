@@ -53,48 +53,46 @@ export default function SoulsPage() {
       initializeHybridStorage(address).catch(console.error)
 
       try {
-        // First, fetch owned NFTs from OpenSea
-        const response = await fetch(`/api/opensea/owned?address=${address}`)
-        if (!response.ok) {
-          throw new Error('Failed to fetch owned NFTs')
+        // Fetch owned NFTs from OpenSea (best-effort ownership badges)
+        let characters: any[] = []
+        let ownershipFetchFailed = false
+        try {
+          const response = await fetch(`/api/opensea/owned?address=${address}`)
+          if (response.ok) {
+            const ownedNftData = await response.json()
+            characters = ownedNftData.characters || []
+          } else {
+            ownershipFetchFailed = true
+          }
+        } catch {
+          ownershipFetchFailed = true
         }
-        
-        const ownedNftData = await response.json()
-        const characters = ownedNftData.characters || []
         setOwnedNfts(characters)
 
-        // Get all stored souls
+        // Always show ALL local souls — never hide creative work on ownership/API failure
         const allStoredSouls = getStoredSouls()
-        console.log("All stored souls:", allStoredSouls)
-        console.log("Owned NFTs characters:", characters)
-        
-        // Filter souls to only show ones for NFTs the user actually owns
-        const ownedTokenIds = new Set(characters.map((char: any) => char.tokenId))
-        console.log("Owned token IDs:", Array.from(ownedTokenIds))
-        
-        const filteredSouls = allStoredSouls.filter(soul => {
-          const hasNft = ownedTokenIds.has(soul.data.pfpId)
-          console.log(`Soul ${soul.data.pfpId} - Owner has NFT: ${hasNft}`)
-          return hasNft
-        })
-        
-        console.log("Filtered souls:", filteredSouls)
-        setSouls(filteredSouls)
+        setSouls(allStoredSouls)
 
-        // Check which souls have been deployed (have existing conversations)
+        const ownedTokenIds = new Set(characters.map((char: any) => String(char.tokenId)))
+        if (ownershipFetchFailed) {
+          console.warn("OpenSea ownership fetch failed — showing all local souls without ownership filter")
+        }
+
         const deployed = new Set<string>()
-        filteredSouls.forEach((soul) => {
+        allStoredSouls.forEach((soul) => {
           const memories = getCharacterMemories(soul.data.pfpId)
           if (memories && memories.messages.length > 0) {
             deployed.add(soul.data.pfpId)
           }
         })
         setDeployedSouls(deployed)
+        // stash owned ids for badges via ownedNfts state already set
+        void ownedTokenIds
 
       } catch (error) {
         console.error('Error loading souls and NFTs:', error)
-        // On error, still try to load souls but with empty owned NFTs
-        setSouls([])
+        // Still show local souls
+        setSouls(getStoredSouls())
         setOwnedNfts([])
       }
 
@@ -212,35 +210,14 @@ export default function SoulsPage() {
               </div>
               <p className="text-xl text-purple-300 mb-4">No souls created yet</p>
               <p className="text-muted-foreground mb-6 max-w-md">
-                {ownedNfts.length > 0 
-                  ? `You own ${ownedNfts.length} 0N1 Force NFT${ownedNfts.length > 1 ? 's' : ''}. Create a soul for any of them to get started.`
-                  : "You don't own any 0N1 Force NFTs yet. You need to own an NFT to create souls."
-                }
+                Create a soul from your 0N1 Force NFT to get started. Souls you already crafted stay listed here even if ownership changes.
               </p>
-              {ownedNfts.length > 0 ? (
-                <Button
+              <Button
                   onClick={() => router.push("/")}
                   className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
                 >
                   Create Your First Soul
                 </Button>
-              ) : (
-                <div className="flex gap-3">
-                  <Button
-                    onClick={() => window.open("https://opensea.io/collection/0n1-force", "_blank")}
-                    className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700"
-                  >
-                    Get 0N1 Force NFT
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => router.push("/?connect=true")}
-                    className="border-purple-500/30 text-purple-300 hover:bg-purple-900/20"
-                  >
-                    Connect Different Wallet
-                  </Button>
-                </div>
-              )}
             </CardContent>
           </Card>
         ) : (
@@ -259,6 +236,7 @@ export default function SoulsPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {filteredSouls.map((soul) => {
                 const isDeployed = deployedSouls.has(soul.data.pfpId)
+                const ownsNft = ownedNfts.some((n: any) => String(n.tokenId) === String(soul.data.pfpId))
 
                 return (
                   <Card
@@ -272,10 +250,20 @@ export default function SoulsPage() {
                       >
                         {soul.data.soulName || `0N1 Force #${soul.data.pfpId}`}
                       </CardTitle>
-                      <div className="flex items-center text-sm text-muted-foreground">
+                      <div className="flex items-center flex-wrap gap-2 text-sm text-muted-foreground">
                         <span>0N1 Force #{soul.data.pfpId}</span>
-                        <span className="mx-2">•</span>
+                        <span className="mx-1">•</span>
                         <span>{new Date(soul.createdAt).toLocaleDateString()}</span>
+                        <Badge
+                          variant="outline"
+                          className={
+                            ownsNft
+                              ? "border-green-500/40 text-green-300"
+                              : "border-amber-500/40 text-amber-300"
+                          }
+                        >
+                          {ownsNft ? "Owned in wallet" : "Not in connected wallet"}
+                        </Badge>
                       </div>
                     </CardHeader>
                     <CardContent className="pb-3 space-y-4 flex-grow">

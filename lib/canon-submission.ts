@@ -207,6 +207,24 @@ export async function validateForCanon(soul: CharacterData): Promise<CanonValida
     `${traits.length}/${rawCount} well-formed traits`,
   )
 
+  // Never sign submissions built on invented / unverified traits
+  if (soul.traitsVerified === false || soul.traitsSource === "unverified") {
+    check(
+      "traits.verified",
+      "error",
+      "Traits are not verified from OpenSea or the pinned sample token — refuse export (no mock traits)",
+    )
+  } else if (soul.traitsVerified === true || soul.traitsSource === "sample" || soul.traitsSource === "opensea") {
+    check("traits.verified", "pass", `source=${soul.traitsSource ?? "verified"}`)
+  } else if (rawCount > 0) {
+    // Legacy souls without the flag: warn, don't hard-block (pre-A2 exports)
+    check(
+      "traits.verified",
+      "warn",
+      "traitsVerified flag missing (legacy soul) — re-fetch traits from OpenSea before a new signed submission",
+    )
+  }
+
   const classified = classifyTraits(traits)
   const kit = getCharacterPowerKit(traits)
   const hasBodyTrait = traits.some((t) => norm(t.trait_type) === "body")
@@ -228,8 +246,8 @@ export async function validateForCanon(soul: CharacterData): Promise<CanonValida
     const rules = getPathSelectionRules(kit.bodyType.trait, rawTier)
     const ruleError = validateChosenPaths(kit.bodyType, rawTier, chosen)
     if (ruleError) {
-      // Without a Type trait the tier was guessed - can't call it an error.
-      check("paths.count", rawTier ? "error" : "warn", ruleError)
+      // Extrapolated / unknown tier → warn only; known tier → hard error
+      check("paths.count", rules.extrapolated || !rawTier?.trim() ? "warn" : "error", ruleError)
     } else if (chosen.length < rules.count) {
       check("paths.count", "warn", `${chosen.length}/${rules.count} development paths chosen (incomplete, not invalid)`)
     } else {

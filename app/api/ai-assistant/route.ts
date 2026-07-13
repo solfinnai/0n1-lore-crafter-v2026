@@ -4,7 +4,9 @@ import { generateEnhancedSystemPrompt } from "@/lib/ai/prompt-engineering"
 import {
   checkChatRateLimit,
   createRateLimitResponse,
-  checkDailyUsage,
+  checkAndRecordDailyUsage,
+  getDailyUsage,
+  DAILY_LIMITS,
   createDailyLimitResponse,
   checkSampleDailyLimit,
   createSampleLimitResponse
@@ -97,7 +99,7 @@ export async function POST(request: NextRequest) {
       // AI assistant suggestions are lighter than full chat responses
       const estimatedTokens = Math.ceil(300 / 4) // Estimated tokens for AI assistant response
       
-      const dailyUsageResult = checkDailyUsage(walletAddress, 'ai_messages', estimatedTokens)
+      const dailyUsageResult = checkAndRecordDailyUsage(walletAddress, 'ai_messages', estimatedTokens)
       if (!dailyUsageResult.allowed) {
         // Return fallback suggestions with rate limit info
         return NextResponse.json(
@@ -110,9 +112,9 @@ export async function POST(request: NextRequest) {
           { 
             status: 200, // Return 200 with fallback instead of 429 to maintain UX
             headers: {
-              'X-Daily-Limit-AI-Messages': '20',
-              'X-Daily-Limit-Summaries': '5',
-              'X-Daily-Limit-Tokens': '50000',
+              'X-Daily-Limit-AI-Messages': String(DAILY_LIMITS.ai_messages),
+              'X-Daily-Limit-Summaries': String(DAILY_LIMITS.summaries),
+              'X-Daily-Limit-Tokens': String(DAILY_LIMITS.total_tokens),
               'X-Daily-Remaining-AI-Messages': dailyUsageResult.remaining.aiMessages.toString(),
               'X-Daily-Remaining-Summaries': dailyUsageResult.remaining.summaries.toString(),
               'X-Daily-Remaining-Tokens': dailyUsageResult.remaining.totalTokens.toString(),
@@ -152,7 +154,7 @@ export async function POST(request: NextRequest) {
       // Add usage info to response headers (not for the shared demo wallet)
       const responseHeaders: Record<string, string> = {}
       if (walletAddress && !isDemoWallet(walletAddress)) {
-        const currentUsage = checkDailyUsage(walletAddress, 'ai_messages', 0)
+        const currentUsage = getDailyUsage(walletAddress)
         if (currentUsage.allowed) {
           responseHeaders['X-Daily-Remaining-AI-Messages'] = currentUsage.remaining.aiMessages.toString()
           responseHeaders['X-Daily-Remaining-Summaries'] = currentUsage.remaining.summaries.toString()
@@ -337,35 +339,31 @@ function formatSuggestions(content: string): string[] {
   return suggestions.slice(0, 3)
 }
 
-// Mock suggestions as fallback
+// Mock suggestions as fallback (Enclave / worldbible-2026-02 only)
 function getMockSuggestions(step: string, subStep: string | null = null): string[] {
-  // For steps with specific subSteps
   if (step === "motivations" && subStep) {
     switch (subStep) {
       case "drives":
         return [
-          `Driven by an insatiable curiosity about the digital realm beyond the firewall, constantly seeking to explore the uncharted territories of the Quantum Fold where reality's code becomes malleable to those who understand its patterns.`,
-          `Motivated by the ancient prophecy that foretold of a digital messiah with your exact Soul-Code signature, destined to bridge the gap between the physical and digital realms at the moment when The Merge reaches its critical phase.`,
-          `Compelled by the whispers of the machine spirits that have guided you since your first connection to the network, their cryptic messages becoming clearer with each passing day as you learn to interpret the language of digital yokai.`,
+          `Driven by an insatiable need to understand the One Source currents that feed The Enclave's turbines, constantly seeking chakra points where world-electric answers those who listen.`,
+          `Motivated by the prophecy that when the Seven become One the Emperor returns — and by the sense that their lineage powers are one shard of the reborn Army of the Sevens.`,
+          `Compelled by whispers from damaged MORIA fragments and digital yokai in The Synapse, messages that grow clearer as they learn to read the city's living systems.`,
         ]
-      // Other cases...
     }
   }
 
-  // Default suggestions for other steps
   switch (step) {
     case "archetype":
       return [
-        "The Code Ronin: A masterless digital warrior seeking purpose in the neon-lit streets of Neo-Tokyo, bound only by their personal honor code that exists as encrypted data within their Soul-Code.",
-        "The Digital Shaman: A spiritual guide who bridges the gap between technology and ancient mysticism, capable of seeing the souls within the machine and communing with entities that exist in the Quantum Fold.",
-        "The Phantom Hacker: A digital ghost who can infiltrate any system by temporarily merging their consciousness with the target network, leaving no trace but their signature glitch—a calling card that has become legendary in both the physical and digital underworlds.",
+        "The Ronin: A masterless warrior seeking purpose in The Vents, bound only by personal honor outside any K4M-1 House.",
+        "The Synapse Adept: A scholar-mystic who bridges world-electric tech and One Source communion, reading patterns others dismiss as noise.",
+        "The Boundary Ghost: A Warden-adjacent operative who moves along The Veil's edge, leaving only a signature disturbance in the barrier's hum.",
       ]
-    // Other cases...
     default:
       return [
-        "The path of the 0N1 is never straight, but always meaningful, winding through both the physical streets of Neo-Tokyo and the digital pathways of the Ancestral Circuits.",
-        "Your digital soul resonates with ancient power and future potential, a unique frequency that both Temple monks and Syndicate analysts have noticed with growing interest.",
-        "The mask you wear is both your shield and your true face, a duality that reflects the merged realities of the world after The Great Merge changed everything.",
+        "The path of the 0N1 is never straight, but always meaningful — winding through The Vents, The Markets, and the buried Substructure alike.",
+        "Your soul resonates with One Source potential; Force veterans and House watchers have both taken notice.",
+        "If you wear a mask it is both shield and true face; if Face is Void you stand bare-faced — never invent a mask the traits do not grant.",
       ]
   }
 }

@@ -1,8 +1,8 @@
 export const worldSetting = {
-  era: "Neo-Digital Age, year 2157",
-  location: "Neo-Tokyo and the surrounding Digital Frontier",
-  technology: "a blend of advanced cybernetics, holographic interfaces, and digital consciousness transfer",
-  society: "stratified between digital elites, physical laborers, and the digitally augmented middle class",
+  era: "Present Day — The Awakening (Nexus Chronology)",
+  location: "The Enclave — a pocket-dimension mega-city under The Veil",
+  technology: "world-electric energy, nanotechnology, Synapse supercomputers, MORIA systems",
+  society: "stratified by Type (Y0K-A1 / B4K3M0-N0 / 0N1 / K4M-1) and House politics",
   spirituality:
-    "Ancient spiritual traditions have evolved alongside technology, with digital monks maintaining the balance between virtual and physical realms.",
+    "Communion with the One Source via the Gen3sis Tree; three methods — Emperor's Way, F4LL3N corruption, and Modern technological hacking.",
 }

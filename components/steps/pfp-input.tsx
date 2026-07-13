@@ -70,19 +70,33 @@ export function PfpInput({ characterData, updateCharacterData, nextStep }: PfpIn
         isApiData: isFromApi,
       } = await fetchNftDataWithFallback(normalizedTokenId)
 
-      if (fetchedTraits.length === 0) {
-        setError("Could not fetch data from OpenSea API. Using generated traits instead.")
+      setIsApiData(isFromApi)
+
+      if (!isFromApi || fetchedTraits.length === 0) {
+        setTraits([])
+        setTraitsLoaded(false)
+        updateCharacterData({
+          pfpId: normalizedTokenId,
+          traits: [],
+          imageUrl: undefined,
+          traitsVerified: false,
+          traitsSource: "unverified",
+        })
+        setError(
+          "Could not verify traits from OpenSea. We will not invent traits — retry when the API is available, or use Try Sample 0N1 (#922).",
+        )
       } else {
         setTraits(fetchedTraits)
         setImageUrl(fetchedImageUrl)
         updateCharacterData({
-          pfpId: normalizedTokenId, // Store normalized ID
+          pfpId: normalizedTokenId,
           traits: fetchedTraits,
           imageUrl: fetchedImageUrl || undefined,
+          traitsVerified: true,
+          traitsSource: normalizedTokenId === "922" ? "sample" : "opensea",
         })
         setTraitsLoaded(true)
-        setIsApiData(isFromApi)
-        setError("") // Clear any previous errors
+        setError("")
       }
     } catch (err) {
       console.error("Error in PfpInput component:", err)
@@ -115,13 +129,34 @@ export function PfpInput({ characterData, updateCharacterData, nextStep }: PfpIn
         isApiData: isFromApi,
       } = await fetchNftDataWithFallback(normalizedTokenId)
 
+      setIsApiData(isFromApi)
+
+      if (!isFromApi || fetchedTraits.length === 0) {
+        updateCharacterData({
+          pfpId: normalizedTokenId,
+          traits: [],
+          imageUrl: undefined,
+          traitsVerified: false,
+          traitsSource: "unverified",
+        })
+        setTraitsLoaded(false)
+        setError(
+          "Could not verify traits from OpenSea for this NFT. Wizard will not advance with invented traits — retry later or use Try Sample 0N1 (#922).",
+        )
+        return
+      }
+
       updateCharacterData({
         pfpId: normalizedTokenId,
         traits: fetchedTraits,
         imageUrl: fetchedImageUrl || undefined,
+        traitsVerified: true,
+        traitsSource: normalizedTokenId === "922" ? "sample" : "opensea",
       })
+      setTraits(fetchedTraits)
+      setImageUrl(fetchedImageUrl)
+      setTraitsLoaded(true)
 
-      // Automatically proceed to next step
       nextStep()
     } catch (err) {
       console.error("Error fetching NFT data:", err)

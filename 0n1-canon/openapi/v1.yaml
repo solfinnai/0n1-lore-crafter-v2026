@@ -1,0 +1,36 @@
+openapi: 3.0.3
+info:
+  title: 0N1 Canon API
+  version: 1.0.0
+  description: Thin transport over lore-sdk. Prefer static snapshots for games.
+paths:
+  /v1/meta:
+    get:
+      summary: Canon and souls version pins
+      responses:
+        "200":
+          description: Meta
+  /v1/snapshot/{canonVersion}.json:
+    get:
+      summary: Immutable mechanics snapshot
+      parameters:
+        - name: canonVersion
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Snapshot JSON
+  /v1/resolve:
+    post:
+      summary: Resolve character sheet from traits
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: CharacterSheet

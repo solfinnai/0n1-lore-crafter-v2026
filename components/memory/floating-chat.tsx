@@ -109,11 +109,12 @@ export function FloatingChat({ soul, memoryProfile, onClose, onUpdateMemory }: F
         body: JSON.stringify({
           message: userMessage.content,
           nftId: soul.data.pfpId,
+          walletAddress: address, // top-level so sample daily caps apply
           memoryProfile: {
             ...memoryProfile,
             metadata: {
               ...memoryProfile.metadata,
-              walletAddress: address // Include wallet address for daily limits
+              walletAddress: address
             }
           },
           enhancedPersonality: aiSettings.enhancedPersonality

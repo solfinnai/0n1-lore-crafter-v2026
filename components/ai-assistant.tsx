@@ -188,15 +188,15 @@ export function AiAssistant({
     switch (step) {
       case "archetype":
         return [
-          "The Ronin: A masterless warrior seeking purpose in the neon-lit streets of Neo-Tokyo.",
-          "The Digital Shaman: A spiritual guide who bridges the gap between technology and ancient mysticism.",
-          "The Phantom Hacker: A digital ghost who can infiltrate any system, leaving no trace but their signature glitch.",
+          "The Ronin: A masterless warrior seeking purpose in The Vents, outside any K4M-1 House.",
+          "The Synapse Adept: A guide who bridges world-electric tech and One Source mysticism.",
+          "The Boundary Ghost: An operative who moves along The Veil, leaving only a disturbance in the barrier's hum.",
         ]
       case "background":
         return [
-          `Born in the shadow of the Blazing Temple, where digital prayers ascend to silicon gods.`,
-          `Raised in the underground circuits of Cyber District 7, where survival means mastering both code and combat.`,
-          `Emerged from the synthetic womb of a forgotten AI experiment, neither fully human nor machine.`,
+          `Raised in The Vents above the ancient turbines, where tribal streets teach survival before doctrine.`,
+          `Brought up near The Battlements, watching Wardens scan The Glitch for signs of a Second Shift.`,
+          `Found as a child in The Markets' black stalls — origin unknown, powers awakening with the Army of the Sevens.`,
         ]
       case "hopes":
         return [
@@ -248,15 +248,15 @@ export function AiAssistant({
         ]
       case "powersAbilities":
         return [
-          `Spirit Sight: Your Ethereal Blue eyes can perceive the digital souls of both machines and humans.`,
-          `Oni Manifestation: Your mask allows you to channel the rage of ancient digital spirits in combat.`,
-          `Temple Flame Manipulation: Control the sacred digital fires of the Blazing Temple to purify corrupted code.`,
+          `Use only powers from this NFT's canonical kit — never invent abilities outside classifyTraits / power kit.`,
+          `Face: Void means bare-faced; never invent a mask. Background colors are resonance, not body lineage.`,
+          `Path counts must respect Type tier (Y0K-A1 / B4K3M0-N0 / 0N1 / K4M-1) selection rules.`,
         ]
       default:
         return [
-          "The path of the 0N1 is never straight, but always meaningful.",
-          "Your digital soul resonates with ancient power and future potential.",
-          "The mask you wear is both your shield and your true face.",
+          "The path of the 0N1 is never straight, but always meaningful under The Enclave dome.",
+          "Your soul resonates with One Source potential and the reborn Army of the Sevens.",
+          "If you wear a mask it is both shield and true face; Face: Void means you stand bare-faced.",
         ]
     }
   }

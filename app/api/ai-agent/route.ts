@@ -2,7 +2,9 @@ import { type NextRequest, NextResponse } from "next/server"
 import {
   checkChatRateLimit,
   createRateLimitResponse,
-  checkDailyUsage,
+  checkAndRecordDailyUsage,
+  getDailyUsage,
+  DAILY_LIMITS,
   createDailyLimitResponse
 } from '@/lib/rate-limit'
 import { claudeComplete, isClaudeConfigured } from '@/lib/ai/claude'
@@ -57,16 +59,16 @@ export async function POST(request: NextRequest) {
       const messageTokens = messages.reduce((acc: number, msg: any) => acc + Math.ceil(msg.content.length / 4), 0)
       const estimatedTokens = messageTokens + Math.ceil(maxTokens / 2) // Input + estimated response
       
-      const dailyUsageResult = checkDailyUsage(walletAddress, 'ai_messages', estimatedTokens)
+      const dailyUsageResult = checkAndRecordDailyUsage(walletAddress, 'ai_messages', estimatedTokens)
       if (!dailyUsageResult.allowed) {
         return NextResponse.json(
           createDailyLimitResponse(dailyUsageResult.remaining, dailyUsageResult.resetTime, "AI agent"),
           { 
             status: 429,
             headers: {
-              'X-Daily-Limit-AI-Messages': '20',
-              'X-Daily-Limit-Summaries': '5',
-              'X-Daily-Limit-Tokens': '50000',
+              'X-Daily-Limit-AI-Messages': String(DAILY_LIMITS.ai_messages),
+              'X-Daily-Limit-Summaries': String(DAILY_LIMITS.summaries),
+              'X-Daily-Limit-Tokens': String(DAILY_LIMITS.total_tokens),
               'X-Daily-Remaining-AI-Messages': dailyUsageResult.remaining.aiMessages.toString(),
               'X-Daily-Remaining-Summaries': dailyUsageResult.remaining.summaries.toString(),
               'X-Daily-Remaining-Tokens': dailyUsageResult.remaining.totalTokens.toString(),
@@ -144,7 +146,7 @@ Create a rich, immersive scene with detailed descriptions:
     const responseHeaders: Record<string, string> = {}
     if (walletAddress) {
       // Get updated usage info after processing (don't increment again, just get current state)
-      const currentUsage = checkDailyUsage(walletAddress, 'ai_messages', 0)
+      const currentUsage = getDailyUsage(walletAddress)
       if (currentUsage.allowed) {
         responseHeaders['X-Daily-Remaining-AI-Messages'] = currentUsage.remaining.aiMessages.toString()
         responseHeaders['X-Daily-Remaining-Summaries'] = currentUsage.remaining.summaries.toString()

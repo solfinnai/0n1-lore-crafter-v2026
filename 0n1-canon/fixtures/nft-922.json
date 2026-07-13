@@ -1,0 +1,26 @@
+{
+  "tokenId": "922",
+  "collectionId": "collection.eth",
+  "canonVersion": "worldbible-2026-02",
+  "traits": [
+    { "trait_type": "Body", "value": "Citrine" },
+    { "trait_type": "Eyes", "value": "Angry (Jasper)" },
+    { "trait_type": "Face", "value": "PR Mask (Citrine)" },
+    { "trait_type": "Hair", "value": "Dreads (Obsidian)" },
+    { "trait_type": "Head", "value": "Fedora (Obsidian)" },
+    { "trait_type": "Type", "value": "Y0K-A1" },
+    { "trait_type": "Wear", "value": "Track Jacket (Citrine)" },
+    { "trait_type": "Extra", "value": "Void" },
+    { "trait_type": "Mouth", "value": "Frown" },
+    { "trait_type": "Style", "value": "3" },
+    { "trait_type": "Spirit", "value": "1" },
+    { "trait_type": "Strength", "value": "2" },
+    { "trait_type": "Background", "value": "Citrine" }
+  ],
+  "expectations": {
+    "body": "Citrine",
+    "type": "Y0K-A1",
+    "faceIsNotBare": true,
+    "extraVoidIsCosmetic": true
+  }
+}
