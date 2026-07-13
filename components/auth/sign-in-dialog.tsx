@@ -46,6 +46,32 @@ function describeUser(user: User): string {
   return "Signed in"
 }
 
+// The last email that successfully signed in on this browser. Used to prefill
+// the field so a linked-wallet user (who must detour through email — Supabase
+// has no web3->email identity linking yet, supabase/auth#2238) signs in with
+// one tap instead of retyping. Best-effort: private mode / quota just means no
+// prefill. Only ever the device owner's own address — same exposure as the
+// field's autoComplete="email".
+const LAST_EMAIL_KEY = "0n1.lastEmail"
+
+function rememberEmail(email: string) {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(LAST_EMAIL_KEY, email)
+  } catch {
+    /* best-effort */
+  }
+}
+
+function recallEmail(): string {
+  if (typeof window === "undefined") return ""
+  try {
+    return window.localStorage.getItem(LAST_EMAIL_KEY) ?? ""
+  } catch {
+    return ""
+  }
+}
+
 /**
  * Where a wallet lands if it signs in, per the server preflight. Fail-open to
  * "unlinked" on any error: sign-in then behaves exactly as before the
@@ -74,12 +100,15 @@ export function SignInButton() {
   const { adoptAddress } = useWallet()
   const [open, setOpen] = useState(false)
   const [view, setView] = useState<"methods" | "code">("methods")
-  const [email, setEmail] = useState("")
+  const [email, setEmail] = useState(recallEmail)
   const [code, setCode] = useState("")
   const [emailBusy, setEmailBusy] = useState(false)
   const [walletBusy, setWalletBusy] = useState(false)
   const [signOutBusy, setSignOutBusy] = useState(false)
   const [linkBusy, setLinkBusy] = useState(false)
+  const [addEmailValue, setAddEmailValue] = useState("")
+  const [addEmailBusy, setAddEmailBusy] = useState(false)
+  const emailInputRef = useRef<HTMLInputElement>(null)
   // Bumped whenever the dialog resets so a wallet promise that settles late
   // (after a timeout or dismissal) can't close a reopened dialog or toast.
   const walletAttemptRef = useRef(0)
@@ -132,6 +161,7 @@ export function SignInButton() {
         type: "email",
       })
       if (error) throw error
+      rememberEmail(email.trim()) // prefill next time (esp. the wallet detour)
       closeDialog()
       toast.success("Signed in")
     } catch (e) {
@@ -173,9 +203,20 @@ export function SignInButton() {
       if (attempt !== walletAttemptRef.current) return
       if (status === "email_account") {
         adoptAddress(address) // connected for browsing; just not the login key
-        toast.info("This wallet is linked to an email account", {
-          description:
-            "Enter your email below to sign in — your souls live there, and the wallet stays linked as proof of ownership.",
+        // Active hand-off to the email step instead of a dead-end toast. The
+        // email field is already mounted (methods view), so prefill the known
+        // address and focus it — one tap on "Continue with email" sends the
+        // code. We deliberately DON'T auto-send: an unsolicited email on a
+        // wallet click is a surprise-send / inbox-spam vector.
+        const known = recallEmail()
+        if (known && !email.trim()) setEmail(known)
+        setView("methods")
+        // Delay past the toast/Radix focus-restore so the focus actually lands.
+        setTimeout(() => emailInputRef.current?.focus(), 120)
+        toast.info("This wallet signs in through your email", {
+          description: known
+            ? "Your email's filled in below — tap “Continue with email” to get your code. The wallet stays linked as proof of ownership."
+            : "Enter this account's email below to get your sign-in code. Your souls live there; the wallet stays linked as proof of ownership.",
           duration: 8000,
         })
         return
@@ -310,6 +351,37 @@ export function SignInButton() {
     }
   }
 
+  /**
+   * Add an email to a WALLET-born account (no email identity yet). This is the
+   * only supported identity mutation for the wallet->email direction
+   * (updateUser; supabase/auth#2238 tracks the reverse). It closes the fresh-
+   * device dead-end: a wallet-only account can't sign in on a browser without
+   * the extension, but once an email is confirmed they get email OTP too.
+   * mailer_autoconfirm is off on this project, so the email stays PENDING until
+   * the user taps the confirmation link.
+   */
+  const handleAddEmail = async () => {
+    if (!supabase || !addEmailValue.trim()) return
+    setAddEmailBusy(true)
+    try {
+      const { error } = await supabase.auth.updateUser({ email: addEmailValue.trim() })
+      if (error) throw error
+      rememberEmail(addEmailValue.trim())
+      toast.success("Check your email to confirm", {
+        description: `We sent a confirmation link to ${addEmailValue.trim()}. Until you tap it, you'll keep signing in with your wallet.`,
+        duration: 8000,
+      })
+      setAddEmailValue("")
+    } catch (e) {
+      toast.error("Couldn't add that email", {
+        description:
+          e instanceof Error ? e.message : "That address may already belong to another account.",
+      })
+    } finally {
+      setAddEmailBusy(false)
+    }
+  }
+
   const handleSignOut = async () => {
     setSignOutBusy(true)
     try {
@@ -365,6 +437,37 @@ export function SignInButton() {
               <p className="text-xs text-purple-300/60">
                 Prove you own a wallet to attach it to this account. Linking never signs you out.
               </p>
+              {!user.email && (
+                <div className="space-y-2 rounded-md border border-purple-500/20 p-3">
+                  <p className="text-xs text-purple-300/80">
+                    Add an email so you can sign in on a device that doesn&apos;t have your wallet
+                    extension. We&apos;ll send a link to confirm it.
+                  </p>
+                  <Input
+                    type="email"
+                    inputMode="email"
+                    autoComplete="email"
+                    placeholder="you@example.com"
+                    value={addEmailValue}
+                    onChange={(e) => setAddEmailValue(e.target.value)}
+                    disabled={addEmailBusy}
+                    className="border-purple-500/30 bg-black/50"
+                  />
+                  <Button
+                    variant="outline"
+                    onClick={handleAddEmail}
+                    disabled={addEmailBusy || !addEmailValue.trim()}
+                    className="w-full border-purple-500/30 hover:bg-purple-900/20"
+                  >
+                    {addEmailBusy ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Mail className="mr-2 h-4 w-4" />
+                    )}
+                    Add email for recovery
+                  </Button>
+                </div>
+              )}
               <Button
                 variant="outline"
                 onClick={handleSignOut}
@@ -445,6 +548,7 @@ export function SignInButton() {
                 className="space-y-2"
               >
                 <Input
+                  ref={emailInputRef}
                   type="email"
                   inputMode="email"
                   autoComplete="email"
