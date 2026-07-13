@@ -16,6 +16,13 @@ const nextConfig = {
   // Pin the tracing root to this project so a stray lockfile in the home
   // directory doesn't make Next infer the wrong workspace root.
   outputFileTracingRoot: new URL('.', import.meta.url).pathname,
+  // Bake sample mode into every build so "Try Sample 0N1" (#922) always shows
+  // on the live site without depending on a Vercel dashboard env toggle.
+  // Set NEXT_PUBLIC_ENABLE_SAMPLE_MODE=false in the environment to disable.
+  env: {
+    NEXT_PUBLIC_ENABLE_SAMPLE_MODE:
+      process.env.NEXT_PUBLIC_ENABLE_SAMPLE_MODE === "false" ? "false" : "true",
+  },
   eslint: {
     ignoreDuringBuilds: true,
   },
